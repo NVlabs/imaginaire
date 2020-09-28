@@ -1,0 +1,177 @@
+pretrained_weight: 1Wf0BhcIpVJgHQunipdt8r-KtQ9mRvKxt
+inference_args:
+    keep_original_size: True
+
+image_save_iter: 1000
+snapshot_save_iter: 5000
+max_iter: 150000
+logging_iter: 50
+trainer:
+    type: imaginaire.trainers.funit
+    model_average: True
+    model_average_beta: 0.999
+    amp: O1
+    gan_mode: hinge
+    loss_weight:
+        gan: 1
+        feature_matching: 1
+        image_recon: 0.1
+    init:
+        type: none
+        gain: 1
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: True
+        type: step
+        step_size: 100000
+        gamma: 0.5
+dis_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: True
+        type: step
+        step_size: 100000
+        gamma: 0.5
+gen:
+    type: imaginaire.generators.coco_funit
+    num_filters: 64
+    num_filters_mlp: 256
+    style_dims: 64
+    usb_dims: 1024
+    num_res_blocks: 2
+    num_mlp_blocks: 3
+    num_downsamples_content: 4
+    num_downsamples_style: 5
+    weight_norm_type: none
+dis:
+    type: imaginaire.discriminators.funit
+    num_filters: 64
+    max_num_filters: 1024
+    num_layers: 6
+    weight_norm_type: spectral
+    num_classes: 305
+# Data options.
+data:
+    val_data_loader_not_distributed: True
+    # Name of this dataset.
+    name: 'animalfaces'
+    # Which dataloader to use?
+    type: imaginaire.datasets.unpaired_few_shot_images
+    # How many data loading workers per GPU?
+    num_workers: 8
+
+    input_types:
+        - images_content:
+            # If not specified, is None by default.
+            ext: jpg
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+        - images_style:
+            # If not specified, is None by default.
+            ext: jpg
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - dataset/mammals/train
+        # Batch size per GPU.
+        batch_size: 8
+        # Data augmentations to be performed in given order.
+        augmentations:
+            # First resize all inputs to this size.
+            resize_h_w: 270, 270
+            # Rotate in (-rotate, rotate) in degrees.
+            rotate: 4
+            # Scale image by factor \in [1, 1+random_scale_limit].
+            random_scale_limit: 0.1
+            # Horizontal flip?
+            horizontal_flip: True
+            # Crop size.
+            random_crop_h_w: 256, 256
+
+    # Val dataset details.
+    val:
+        # Input LMDBS.
+        roots:
+            - dataset/mammals/test
+        # Batch size per GPU.
+        batch_size: 10
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 256, 256
+            center_crop_h_w: 256, 256
+
+test_data:
+    # Name of this dataset.
+    name: 'cocostuff'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_images
+    # How many data loading workers per GPU?
+    num_workers: 8
+    # images_content should be the last to ensure correct output size.
+    input_types:
+        - images_style:
+            # If not specified, is None by default.
+            ext: png
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+        - images_content:
+            # If not specified, is None by default.
+            ext: png
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+
+    paired: True
+    # Validation dataset details.
+    test:
+        is_lmdb: False
+        roots:
+            - projects/coco_funit/test_data/mammals/
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 256, 256
+            horizontal_flip: False

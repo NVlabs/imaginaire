@@ -1,0 +1,126 @@
+# How often do you want to log the training stats.
+logging_iter: 2
+# Number of training epochs.
+max_iter: 2
+# Whether to benchmark speed or not.
+speed_benchmark: True
+# trainer options
+trainer:
+    type: imaginaire.trainers.pix2pixHD
+    amp: O1
+    perceptual_loss:
+      mode: 'vgg19'
+      layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+      weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+    gan_mode: hinge
+    gan_relativistic: False
+    loss_weight:
+      gan: 1.0
+      feature_matching: 10.0
+      perceptual: 10.0
+    init:
+      type: xavier
+      gain: 0.02
+
+# model options
+gen:
+    type: imaginaire.generators.pix2pixHD
+    global_generator:
+        num_filters: 32
+        num_downsamples: 4
+        num_res_blocks: 9
+    local_enhancer:
+        num_enhancers: 0
+        num_res_blocks: 3
+    weight_norm_type: spectral
+    activation_norm_type: instance
+    padding_mode: reflect
+dis:
+    type: imaginaire.discriminators.multires_patch
+    num_filters: 32
+    max_num_filters: 512
+    num_discriminators: 2
+    num_layers: 3
+    weight_norm_type: spectral
+    activation_norm_type: instance
+
+# optimization option
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 20
+        gamma: 0.9
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 20
+        gamma: 0.9
+
+# Data options.
+data:
+    # Name of this dataset.
+    name: 'cityscapes'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_images
+    # How many data loading workers per GPU?
+    num_workers: 4
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - seg_maps:
+            ext: png
+            num_channels: 35
+            interpolator: NEAREST
+            normalize: False
+        - instance_maps:
+            ext: png
+            num_channels: 1
+            interpolator: NEAREST
+            normalize: False
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps
+        - instance_maps
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - dataset/unit_test/lmdb/pix2pixHD
+        # Batch size per GPU.
+        batch_size: 1
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_h_w: 256, 512
+            # Horizontal flip?
+            horizontal_flip: False
+
+    # Validation dataset details.
+    val:
+        # Input LMDBs.
+        roots:
+            - dataset/unit_test/lmdb/pix2pixHD
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 256, 512
+            horizontal_flip: False

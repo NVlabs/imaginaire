@@ -1,0 +1,185 @@
+pretrained_weight: 1R27Zk9zlj8HitW_bOsQmbT2LOQNCKJJL
+inference_args:
+    random_style: True
+    use_fixed_random_style: False
+    keep_original_size: True
+
+image_save_iter: 5000
+snapshot_save_epoch: 5
+max_epoch: 400
+logging_iter: 100
+trainer:
+    type: imaginaire.trainers.spade
+    model_average: True
+    model_average_beta: 0.9999
+    model_average_start_iteration: 1000
+    model_average_batch_norm_estimation_iteration: 30
+    amp: O1
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+        fp16: True
+    loss_weight:
+        gan: 1.0
+        perceptual: 10.0
+        feature_matching: 10.0
+        kl: 0.05
+    init:
+        type: xavier
+        gain: 0.02
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 400
+        gamma: 0.1
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 400
+        gamma: 0.1
+gen:
+    type: imaginaire.generators.spade
+    version: v20
+    style_dims: 256
+    num_filters: 128
+    kernel_size: 3
+    weight_norm_type: 'spectral'
+    use_posenc_in_input_layer: False
+    global_adaptive_norm_type: 'sync_batch'
+    activation_norm_params:
+        num_filters: 128
+        kernel_size: 5
+        separate_projection: True
+        activation_norm_type: 'sync_batch'
+    style_enc:
+        num_filters: 64
+        kernel_size: 3
+dis:
+    type: imaginaire.discriminators.spade
+    kernel_size: 4
+    num_filters: 128
+    max_num_filters: 512
+    num_discriminators: 2
+    num_layers: 5
+    activation_norm_type: 'none'
+    weight_norm_type: 'spectral'
+
+# Data options.
+data:
+    # Name of this dataset.
+    name: 'cocostuff'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_images
+    # How many data loading workers per GPU?
+    num_workers: 8
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+            use_dont_care: False
+        - seg_maps:
+            ext: png
+            num_channels: 183
+            interpolator: NEAREST
+            normalize: False
+            use_dont_care: True
+        - edge_maps:
+            ext: png
+            num_channels: 1
+            interpolator: BILINEAR
+            normalize: False
+            use_dont_care: False
+
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps
+        - edge_maps
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - datasets/cocostuff/train
+        # Batch size per GPU.
+        batch_size: 4
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_smallest_side: 256
+            # Rotate in (-rotate, rotate) in degrees.
+            rotate: 0
+            # Scale image by factor \in [1, 1+random_scale_limit].
+            random_scale_limit: 0.2
+            # Horizontal flip?
+            horizontal_flip: True
+            # Crop size.
+            random_crop_h_w: 256, 256
+    # Train dataset details.
+    val:
+        # Input LMDBs.
+        roots:
+            - datasets/cocostuff/val
+        # Batch size per GPU.
+        batch_size: 4
+        # Data augmentations to be performed in given order.
+        augmentations:
+            # Crop size.
+            resize_h_w: 256, 256
+
+test_data:
+    # Name of this dataset.
+    name: 'cocostuff'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_images
+    # How many data loading workers per GPU?
+    num_workers: 8
+    input_types:
+        - seg_maps:
+            ext: png
+            num_channels: 183
+            interpolator: NEAREST
+            normalize: False
+            use_dont_care: True
+        - edge_maps:
+            ext: png
+            num_channels: 1
+            interpolator: BILINEAR
+            normalize: False
+            use_dont_care: False
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps
+        - edge_maps
+
+    paired: True
+    # Validation dataset details.
+    test:
+        is_lmdb: False
+        roots:
+            - projects/spade/test_data/cocostuff_test/
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 256, 256
+            horizontal_flip: False

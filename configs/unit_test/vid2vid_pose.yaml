@@ -1,0 +1,198 @@
+# How often do you want to log the training stats.
+logging_iter: 2
+# Number of training epochs.
+max_iter: 2
+# Number of epochs training single frame generator.
+single_frame_epoch: 0
+# How often to double the number of training frames in each clip.
+num_epochs_temporal_step: 1
+
+# Trainer options.
+trainer:
+    type: imaginaire.trainers.vid2vid
+    amp: O1
+    model_average: True
+    model_average_beta: 0.999
+    model_average_start_iteration: 500
+    model_average_batch_norm_estimation_iteration: 0    
+    num_frames_per_video: 30 
+
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+    loss_weight:
+        gan: 1.0
+        feature_matching: 10.0        
+        temporal_gan: 0.0
+        perceptual: 10.0
+        flow: 10.0
+    init:
+        type: xavier
+        gain: 0.02
+
+# Optimization option.
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.5
+dis_opt:
+    type: adam
+    fused_opt: True
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.5
+
+
+# Model options.
+gen:  
+    type: imaginaire.generators.vid2vid
+    num_filters: 32
+    max_num_filters: 256
+    num_downsamples: 5
+    activation_norm_type: spatially_adaptive
+    activation_norm_params:
+        activation_norm_type: instance
+        num_filters: 0
+        kernel_size: 1
+    weight_norm_type: spectral
+    do_checkpoint: True
+    flow:
+        generate_raw_output: False
+        num_filters: 32
+        max_num_filters: 256
+        num_downsamples: 3
+        num_res_blocks: 6
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        flow_output_multiplier: 20
+        multi_spade_combine:
+            num_layers: 3
+            embed:
+                arch: unet
+                num_filters: 32
+                num_downsamples: 5
+                kernel_size: 3
+                weight_norm_type: spectral
+    embed:
+        use_embed: True
+        arch: encoderdecoder
+        num_filters: 32
+        max_num_filters: 256
+        num_downsamples: 5
+        kernel_size: 3
+        weight_norm_type: spectral
+dis:
+    type: imaginaire.discriminators.fs_vid2vid
+    image:
+        num_filters: 32
+        max_num_filters: 512
+        num_discriminators: 2
+        num_layers: 4
+        weight_norm_type: spectral
+        activation_norm_type: instance
+    additional_discriminators:
+        face:
+            num_filters: 32
+            max_num_filters: 512
+            num_discriminators: 1
+            num_layers: 3
+            weight_norm_type: spectral
+            activation_norm_type: instance
+            loss_weight: 10.0
+            crop_func: imaginaire.model_utils.fs_vid2vid::crop_face_from_output
+            vis: imaginaire.model_utils.fs_vid2vid::get_face_bbox_for_output
+        hand:
+            num_filters: 32
+            max_num_filters: 512
+            num_discriminators: 1
+            num_layers: 3
+            weight_norm_type: spectral
+            activation_norm_type: instance
+            loss_weight: 10.0
+            crop_func: imaginaire.model_utils.fs_vid2vid::crop_hand_from_output
+            vis: imaginaire.model_utils.fs_vid2vid::get_hand_bbox_for_output
+flow_network:
+    type: imaginaire.third_party.flow_net.flow_net
+
+# Data options.
+data:
+    name: 'pose'
+    type: imaginaire.datasets.paired_videos
+    num_frames_G: 3
+    num_frames_D: 3    
+    for_pose_dataset:
+        pose_type: both
+        remove_face_labels: False
+        basic_points_only: False
+        random_drop_prob: 0.05
+    has_foreground: True    
+    num_workers: 2
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - poses-openpose:
+            ext: json
+            num_channels: 27
+            interpolator: None
+            normalize: False
+            pre_aug_ops: decode_json, convert::imaginaire.utils.visualization.pose::openpose_to_npy_largest_only
+            post_aug_ops: vis::imaginaire.utils.visualization.pose::draw_openpose_npy
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - poses-openpose     
+
+    keypoint_data_types:
+        - poses-openpose   
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - dataset/unit_test/lmdb/vid2vid/pose
+        # Batch size per GPU.
+        batch_size: 1
+        initial_sequence_length: 4
+        max_sequence_length: 16
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_smallest_side: 512
+            # Scale image by factor \in [1, 1+random_scale_limit].
+            random_scale_limit: 0.2
+            horizontal_flip: False
+            random_crop_h_w: 512, 512
+
+    # Validation dataset details.
+    val:
+        # Input LMDBs.
+        roots:
+            - dataset/unit_test/lmdb/vid2vid/pose
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_smallest_side: 512
+            horizontal_flip: False
+            center_crop_h_w: 512, 512

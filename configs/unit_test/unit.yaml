@@ -1,0 +1,124 @@
+# How often do you want to log the training stats.
+logging_iter: 2
+# Number of training epochs.
+max_iter: 2
+# Whether to benchmark speed or not.
+speed_benchmark: True
+trainer:
+    type: imaginaire.trainers.unit
+    model_average: True
+    amp: O0
+    gan_mode: hinge
+    perceptual_mode: vgg19
+    perceptual_layers: 'relu_4_1'
+    loss_weight:
+        gan: 1
+        image_recon: 1
+        cycle_recon: 1
+        perceptual: 0
+    init:
+        type: normal
+        gain: 0.02
+# Optimization option.
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.5
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.5
+gen:
+    type: imaginaire.generators.unit
+    num_filters: 24
+    max_num_filters: 64
+    num_res_blocks: 4
+    num_downsamples_content: 2
+    content_norm_type: instance
+    decoder_norm_type: instance
+    weight_norm_type: none
+    pre_act: True
+dis:
+    type: imaginaire.discriminators.unit
+    num_filters: 24
+    max_num_filters: 64
+    num_discriminators: 3
+    num_layers: 4
+    kernel_size: 4
+    weight_norm_type: spectral
+
+# Data options.
+data:
+    # Name of this dataset.
+    name: 'test'
+    # Which dataloader to use?
+    type: 'imaginaire.datasets.unpaired_images'
+    # How many data loading workers per GPU?
+    num_workers: 8
+    input_types:
+        - images_a:
+            # If not specified, is None by default.
+            ext: jpg
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+        - images_b:
+            # If not specified, is None by default.
+            ext: jpg
+            # If not specified, is None by default.
+            num_channels: 3
+            # If not specified, is None by default.
+            interpolator: BILINEAR
+            # If not specified, is False by default.
+            normalize: True
+            # If not specified, is None by default.
+            pre_aug_ops: None
+            # If not specified, is None by default.
+            post_aug_ops: None
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - dataset/unit_test/lmdb/munit
+        # Batch size per GPU.
+        batch_size: 1
+        # Data augmentations to be performed in given order.
+        augmentations:
+            # First resize all inputs to this size.
+            resize_smallest_side: 512
+            # Horizontal flip?
+            horizontal_flip: True
+            # Crop size.
+            random_crop_h_w: 512, 512
+
+    # Val dataset details.
+    val:
+        # Input LMDBS.
+        roots:
+            - dataset/unit_test/lmdb/munit
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_smallest_side: 512
+            center_crop_h_w: 512, 512

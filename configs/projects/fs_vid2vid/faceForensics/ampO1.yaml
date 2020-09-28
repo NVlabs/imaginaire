@@ -1,0 +1,232 @@
+# How often do you want to save output images during training.
+image_save_iter: 1000
+# How often do you want to save trained models.
+snapshot_save_epoch: 25
+# How often do you want to log the training stats.
+logging_iter: 100
+# Number of training epochs.
+max_epoch: 200
+# Number of epochs training single frame generator.
+single_frame_epoch: 0
+# How often to double the number of training frames in each clip.
+num_epochs_temporal_step: 50
+
+# Trainer options.
+trainer:
+    type: imaginaire.trainers.fs_vid2vid
+    amp: O1    
+    model_average: True
+    model_average_beta: 0.999
+    model_average_start_iteration: 500
+    model_average_batch_norm_estimation_iteration: 0
+    num_videos_to_test: 128
+    num_frames_per_video: 10
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+        num_scales: 3
+    loss_weight:
+        gan: 1.0
+        feature_matching: 10.0        
+        temporal_gan: 0.0
+        perceptual: 10.0
+        flow: 10.0
+    init:
+        type: xavier
+        gain: 0.02
+
+# Optimization option.
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.1
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.1
+
+
+# Model options.
+gen:  
+    type: imaginaire.generators.fs_vid2vid
+    num_filters: 32
+    max_num_filters: 1024
+    num_downsamples: 5
+    activation_norm_type: spatially_adaptive
+    activation_norm_params:
+        activation_norm_type: instance
+        num_filters: 0
+        kernel_size: 1
+    weight_norm_type: spectral
+    hyper:
+        is_hyper_spade: True
+        is_hyper_embed: True
+        is_hyper_conv: False
+        kernel_size: 3
+        num_hyper_layers: 4
+        num_fc_layers: 2
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        method_to_use_ref_labels: mul
+        attention:
+            num_filters: 32
+            num_downsamples: 2
+    flow:
+        no_flow: False
+        warp_ref: True
+        generate_raw_output: False
+        num_filters: 32
+        max_num_filters: 1024
+        num_downsamples: 3
+        num_res_blocks: 6
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        flow_output_multiplier: 20
+        multi_spade_combine:
+            num_layers: 2
+            embed:
+                arch: unet
+                num_filters: 32
+                num_downsamples: 5
+                kernel_size: 3
+                sep_warp_embed: True
+                weight_norm_type: spectral
+        sep_prev_flow: False
+    embed:
+        use_embed: True
+        arch: encoderdecoder
+        num_filters: 32
+        num_downsamples: 5
+        kernel_size: 3
+        weight_norm_type: spectral
+dis:
+    type: imaginaire.discriminators.fs_vid2vid
+    image:
+        num_filters: 32
+        max_num_filters: 512
+        num_discriminators: 2
+        num_layers: 4
+        weight_norm_type: spectral
+        activation_norm_type: instance    
+flow_network:
+    type: imaginaire.third_party.flow_net.flow_net
+
+# Data options.
+data:    
+    name: 'faceForensics'    
+    type: imaginaire.datasets.paired_few_shot_videos
+    num_frames_G: 2
+    num_frames_D: 2
+    initial_few_shot_K: 1
+    for_face_dataset:
+        add_upper_face: True    
+    num_workers: 4
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - landmarks-dlib68:
+            ext: json
+            num_channels: 1
+            interpolator: None
+            normalize: False
+            pre_aug_ops: decode_json
+            post_aug_ops: vis::imaginaire.utils.visualization.face::connect_face_keypoints
+    
+    full_data_ops: imaginaire.model_utils.fs_vid2vid::crop_face_from_data
+
+    keypoint_data_types:
+        - landmarks-dlib68
+    input_image:
+        - images
+    input_labels:
+        - landmarks-dlib68
+
+    output_h_w: 512, 512    
+    train:        
+        roots:
+            - datasets/faceForensics/lmdb/train        
+        batch_size: 3
+        initial_sequence_length: 4
+        max_sequence_length: 16        
+        augmentations:
+            resize_smallest_side: 1024
+            horizontal_flip: False            
+    
+    val:        
+        roots:
+            - datasets/faceForensics/lmdb/val        
+        batch_size: 1        
+        augmentations:            
+            resize_smallest_side: 1024
+            horizontal_flip: False
+
+
+# Inference options.
+pretrained_weight: 1F_22ctFmo553nRHy1d_BX7aorc9zk9cF
+
+inference_args:    
+    few_shot_seq_index: 0
+    few_shot_frame_index: 0
+    driving_seq_index: 1
+
+test_data:
+    name: 'faceForensics'
+    type: imaginaire.datasets.paired_few_shot_videos
+    num_workers: 0
+    paired: True
+    for_face_dataset:
+        add_upper_face: True
+        smooth_kernel_size: 5
+        normalize_momentum: 0.9
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - landmarks-dlib68:
+            ext: json
+            num_channels: 1
+            interpolator: None
+            normalize: False
+            pre_aug_ops: decode_json            
+            post_aug_ops: convert::imaginaire.utils.visualization.face::npy_to_tensor
+        
+    full_data_ops: imaginaire.utils.visualization.face::normalize_and_connect_face_keypoints,
+                   imaginaire.model_utils.fs_vid2vid::crop_face_from_data
+
+    keypoint_data_types:
+        - landmarks-dlib68
+    input_image:
+        - images
+    input_labels:
+        - landmarks-dlib68
+
+    output_h_w: 512, 512    
+    test:
+        is_lmdb: False
+        roots:            
+            - projects/fs_vid2vid/test_data/faceForensics/reference
+            - projects/fs_vid2vid/test_data/faceForensics/driving
+        batch_size: 1        
+        augmentations:            
+            resize_smallest_side: 1024
+            horizontal_flip: False

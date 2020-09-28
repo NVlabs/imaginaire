@@ -1,0 +1,117 @@
+image_save_iter: 5000
+snapshot_save_epoch: 5
+max_epoch: 400
+logging_iter: 100
+trainer:
+    distributed_data_parallel: apex
+    type: imaginaire.trainers.spade
+    amp: O1
+    model_average: False
+    model_average_beta: 0.9999
+    model_average_start_iteration: 1000
+    model_average_batch_norm_estimation_iteration: 30
+
+    fid_type: image
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+        fp16: True
+    loss_weight:
+        gan: 1.0
+        perceptual: 10.0
+        feature_matching: 10.0
+        kl: 0.05
+    init:
+        type: xavier
+        gain: 0.02
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.01
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.01
+gen:
+    type: imaginaire.generators.spade
+    version: v20
+    style_dims: 256
+    num_filters: 128
+    kernel_size: 3
+    weight_norm_type: 'spectral'
+    global_adaptive_norm_type: 'sync_batch'
+    activation_norm_params:
+        num_filters: 128
+        kernel_size: 5
+        separate_projection: False
+        weight_norm_type: 'none'
+        activation_norm_type: 'sync_batch'
+    style_enc:
+        num_filters: 64
+        kernel_size: 3
+dis:
+    type: imaginaire.discriminators.spade
+    kernel_size: 3
+    num_filters: 128
+    max_num_filters: 512
+    num_discriminators: 2
+    num_layers: 5
+    activation_norm_type: 'none'
+    weight_norm_type: 'spectral'
+
+# Data options.
+data:
+    # Name of this dataset.
+    name: 'cityscapes'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_images
+    # How many data loading workers per GPU?
+    num_workers: 8
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - seg_maps:
+            ext: png
+            num_channels: 35
+            interpolator: NEAREST
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps
+
+    # Train dataset details.
+    train:
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_h_w: 512, 1024
+            random_crop_h_w: 512, 512
+
+    # Validation dataset details.
+    val:
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False

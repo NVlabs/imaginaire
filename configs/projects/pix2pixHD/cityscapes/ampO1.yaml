@@ -1,0 +1,159 @@
+# How often do you want to save output images during training.
+image_save_iter: 500
+# How often do you want to save trained models.
+snapshot_save_epoch: 20
+# How often do you want to log the training stats.
+logging_iter: 100
+# Number of training epochs.
+max_epoch: 200
+
+# trainer options
+trainer:
+    type: imaginaire.trainers.pix2pixHD
+    amp: O1
+    model_average: True
+    model_average_beta: 0.999
+    model_average_start_iteration: 500
+    model_average_batch_norm_estimation_iteration: 0
+
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+    loss_weight:
+        gan: 1.0
+        feature_matching: 10.0
+        perceptual: 10.0
+    init:
+        type: xavier
+        gain: 0.02
+
+# model options
+gen:
+    type: imaginaire.generators.pix2pixHD
+    global_generator:
+        num_filters: 64
+        num_downsamples: 4
+        num_res_blocks: 9
+    local_enhancer:
+        num_enhancers: 0
+        num_res_blocks: 3
+    weight_norm_type: spectral
+    activation_norm_type: instance
+    padding_mode: reflect
+
+dis:
+    type: imaginaire.discriminators.multires_patch
+    num_filters: 64
+    max_num_filters: 512
+    num_discriminators: 2
+    num_layers: 3
+    weight_norm_type: spectral
+    activation_norm_type: instance
+
+# optimization option
+gen_opt:
+    type: adam
+    lr: 0.0002
+    adam_beta1: 0.5
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.1
+dis_opt:
+    type: adam
+    lr: 0.0002
+    adam_beta1: 0.5
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 100
+        gamma: 0.1
+
+# Data options.
+data:    
+    name: 'cityscapes'    
+    type: imaginaire.datasets.paired_images    
+    num_workers: 4
+    input_types:
+        - images:
+            ext: png
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - seg_maps:
+            ext: png
+            num_channels: 35
+            interpolator: NEAREST
+            normalize: False
+        - instance_maps:
+            ext: png
+            num_channels: 1
+            interpolator: NEAREST
+            normalize: False
+    
+    input_image:
+        - images
+
+    input_labels:
+        - seg_maps
+        - instance_maps
+
+    # Train dataset details.
+    train:        
+        roots:
+            - datasets/cityscapes/train            
+        batch_size: 2
+        augmentations:
+            resize_smallest_side: 512
+            random_scale_limit: 0.2
+            horizontal_flip: True
+            random_crop_h_w: 512, 1024            
+
+    # Validation dataset details.
+    val:        
+        roots:
+            - datasets/cityscapes/val            
+        batch_size: 1        
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False
+
+pretrained_weight: 1B3bXpQQzidJW0G3oCjYSWYEn2zd8h9dg
+inference_args:
+    random_style: False
+
+test_data:    
+    name: 'cityscapes'    
+    type: imaginaire.datasets.paired_images    
+    num_workers: 4
+    input_types:
+        - seg_maps:
+            ext: png
+            num_channels: 35
+            interpolator: NEAREST
+            normalize: False
+        - instance_maps:
+            ext: png
+            num_channels: 1
+            interpolator: NEAREST
+            normalize: False
+    
+    input_labels:
+        - seg_maps
+        - instance_maps
+
+    paired: True    
+    test:
+        is_lmdb: False
+        roots:
+            - projects/pix2pixhd/test_data/cityscapes_test        
+        batch_size: 1        
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False
