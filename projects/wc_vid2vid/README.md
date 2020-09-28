@@ -7,7 +7,7 @@ A GAN-based approach to generate 2D world renderings that are consistent over ti
 [Paper(full)](https://nvlabs.github.io/wc-vid2vid/files/wc-vid2vid.pdf) |
 [Two Minute Papers Video](https://youtu.be/u4HpryLU-VI)
 
-<img alt="teaser" src='https://nvlabs.github.io/wc-vid2vid/videos/side_by_side.gif' width='512'/>
+![](side_by_side.gif)
 
 ## License
 
