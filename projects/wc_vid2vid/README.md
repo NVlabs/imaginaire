@@ -1,7 +1,7 @@
 # World Consistent vid2vid: Video-to-Video Synthesis
 A GAN-based approach to generate 2D world renderings that are consistent over time and viewpoints. This method colors the 3D point cloud of the world as the camera moves through the world, coloring new regions in a manner consistent with the already colored world. It learns to render images based on the 2D projections of the point cloud to the camera in a semantically consistent manner while robustly dealing with incorrect and incomplete point clouds.
 
-### [Project](https://nvlabs.github.io/wc-vid2vid/) |
+[Project](https://nvlabs.github.io/wc-vid2vid/) |
 [YouTube](https://www.youtube.com/watch?v=b2P39sS2kKo) |
 [arXiv](https://arxiv.org/abs/2007.08509) |
 [Paper(full)](https://nvlabs.github.io/wc-vid2vid/files/wc-vid2vid.pdf) |
