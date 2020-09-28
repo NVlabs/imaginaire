@@ -8,7 +8,7 @@
 [Previous Implementation](https://github.com/NVlabs/funit) |
 [Two Minute Papers Video](https://youtu.be/SfvRhqsmU4o)
 
-<img src="https://nvlabs.github.io/FUNIT/images/docs/images/animal_8x8.gif" alt="teaser" width="640"/>
+<img src="funit.gif" alt="teaser" width="640"/>
 
 ## License
 
