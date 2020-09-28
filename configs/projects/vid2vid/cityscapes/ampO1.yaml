@@ -42,23 +42,23 @@ trainer:
 # optimization option
 gen_opt:
     type: adam
-    lr: 0.0001
-    adam_beta1: 0.
+    lr: 0.0002
+    adam_beta1: 0.5
     adam_beta2: 0.999
     lr_policy:
         iteration_mode: False
         type: step
-        step_size: 40
+        step_size: 60
         gamma: 0.1
 dis_opt:
     type: adam
-    lr: 0.0004
-    adam_beta1: 0.
+    lr: 0.0002
+    adam_beta1: 0.5
     adam_beta2: 0.999
     lr_policy:
         iteration_mode: False
         type: step
-        step_size: 40
+        step_size: 60
         gamma: 0.1
 
 
@@ -146,8 +146,10 @@ data:
         initial_sequence_length: 4
         max_sequence_length: 16        
         augmentations:
-            resize_h_w: 512, 1024
-            horizontal_flip: False    
+            resize_smallest_side: 512
+            random_scale_limit: 0.2
+            horizontal_flip: True
+            random_crop_h_w: 512, 1024
     val:        
         roots:
             - datasets/cityscapes/lmdb/val

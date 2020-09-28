@@ -7,7 +7,7 @@
 [Previous Implementation](https://github.com/NVIDIA/pix2pixHD) |
 [Two Minute Papers Video](https://youtu.be/XhH2Cc4thJw)
 
-<img src="https://tcwang0509.github.io/pix2pixHD/images/teaser_1440.gif" alt="teaser" width="640"/>
+<img src="https://github.com/NVIDIA/pix2pixHD/raw/master/imgs/teaser_720.gif" alt="teaser" width="640"/>
 
 ## License
 

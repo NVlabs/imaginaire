@@ -10,7 +10,7 @@ Pytorch implementation for high-resolution (e.g., 2048x1024) photorealistic vide
 [Previous Implementation](https://github.com/NVIDIA/vid2vid) |
 [Two Minute Papers Video](https://youtu.be/GRQuRcpf5Gc)
 
-![](teaser.gif)
+<img src="https://github.com/NVIDIA/vid2vid/raw/master/imgs/teaser.gif" alt="teaser" width="640"/>
 
 ## License
 Imaginaire is released under [NVIDIA Software license](LICENSE.md).
