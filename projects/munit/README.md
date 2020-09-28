@@ -93,7 +93,7 @@ projects/munit/test_data/afhq_dog2cat
     ```
     Outputs are saved in `projects/munit/output/afhq_dog2cat`:
     
-    <img alt="example_input" src="projects/munit/example_input.jpg" width="256" height="256" /><img alt="example_output" src="projects/munit/example_output.jpg" width="256" height="256" />
+    <img alt="example_input" src="example_input.jpg" width="256" height="256" /><img alt="example_output" src="example_output.jpg" width="256" height="256" />
   - To use the style from example cat images, change `random_style` in `configs/projects/munit/afhq_dog2cat/ampO1.yaml` to `False`. 
   - To translate images in the other direction (from cats to dogs), change `a2b` to `False`. 
 
