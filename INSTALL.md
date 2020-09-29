@@ -18,7 +18,7 @@ Our library is developed using an Ubuntu 16.04 machine. We have not yet test our
 git clone https://github.com/nvlabs/imaginaire
 cd imaginaire
 bash scripts/install.sh
-bash scripts/test_installation.sh
+bash scripts/test_training.sh
 ```
 If installation is not successful, error message will be prompted.
 
