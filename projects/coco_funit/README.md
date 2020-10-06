@@ -108,7 +108,7 @@ python inference.py --single_gpu \
 
 The results are stored in `projects/coco_funit/output/mammals`
 
-Below we show the expected style--content-outpt images.
+Below we show the expected style--content-output images.
 
 
 <table>
