@@ -27,7 +27,7 @@ We trained our models using an NVIDIA DGX1 with 8 V100 32GB GPUs. You can try to
 We use the [FaceForensics](http://niessnerlab.org/projects/roessler2018faceforensics.html) dataset. We then use a landmark detection method (e.g. dlib) to estimate the face keypoints, and interpolate them to get face edges.
 
 ### YouTube Dancing
-We use random dancing videos found on YouTube to crease a YouTube Dancing Dataset. We then apply DensePose / OpenPose to estimate the poses for each frame. The video URLs and code to preprocess them can be found [here](https://github.com/NVlabs/few-shot-vid2vid/tree/master/data/preprocess). Please note that the copyright of the dataset belongs to the original owners.
+We use random dancing videos found on YouTube to create a YouTube Dancing Dataset. We then apply DensePose / OpenPose to estimate the poses for each frame. The video URLs and code to preprocess them can be found [here](https://github.com/NVlabs/few-shot-vid2vid/tree/master/data/preprocess). Please note that the copyright of the dataset belongs to the original owners.
 
 
 ## Training
