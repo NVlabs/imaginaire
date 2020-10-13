@@ -67,6 +67,8 @@ class Trainer(BaseTrainer):
         self.criteria['gan'] = GANLoss(cfg.trainer.gan_mode)
         self.criteria['kl'] = GaussianKLLoss()
         self.criteria['image_recon'] = torch.nn.L1Loss()
+        self.criteria['content_recon'] = torch.nn.L1Loss()
+        self.criteria['style_recon'] = torch.nn.L1Loss()
 
         if getattr(cfg.trainer.loss_weight, 'perceptual', 0) > 0:
             self.criteria['perceptual'] = \
@@ -87,13 +89,11 @@ class Trainer(BaseTrainer):
         cycle_recon = 'cycle_recon' in self.weights
         image_recon = 'image_recon' in self.weights
         perceptual = 'perceptual' in self.weights
-        within_latent_recon = 'style_recon_within' in self.weights or \
-                              'content_recon_within' in self.weights
 
         net_G_output = self.net_G(data,
                                   image_recon=image_recon,
                                   cycle_recon=cycle_recon,
-                                  within_latent_recon=within_latent_recon)
+                                  within_latent_recon=False)
         net_D_output = self.net_D(data, net_G_output, real=False,
                                   gan_recon=self.gan_recon)
 
@@ -140,47 +140,25 @@ class Trainer(BaseTrainer):
                                              data['images_b'])
 
         # Style reconstruction loss
-        self.gen_losses['style_recon_a'] = torch.abs(
-            net_G_output['style_ba'] -
-            net_G_output['style_a_rand']).mean()
-        self.gen_losses['style_recon_b'] = torch.abs(
-            net_G_output['style_ab'] -
-            net_G_output['style_b_rand']).mean()
+        self.gen_losses['style_recon_a'] = \
+            self.criteria['style_recon'](net_G_output['style_ba'],
+                                         net_G_output['style_a_rand'])
+        self.gen_losses['style_recon_b'] = \
+            self.criteria['style_recon'](net_G_output['style_ab'],
+                                         net_G_output['style_b_rand'])
         self.gen_losses['style_recon'] = \
             self.gen_losses['style_recon_a'] + self.gen_losses['style_recon_b']
 
-        if within_latent_recon:
-            self.gen_losses['style_recon_aa'] = torch.abs(
-                net_G_output['style_aa'] -
-                net_G_output['style_a'].detach()).mean()
-            self.gen_losses['style_recon_bb'] = torch.abs(
-                net_G_output['style_bb'] -
-                net_G_output['style_b'].detach()).mean()
-            self.gen_losses['style_recon_within'] = \
-                self.gen_losses['style_recon_aa'] + \
-                self.gen_losses['style_recon_bb']
-
         # Content reconstruction loss
-        self.gen_losses['content_recon_a'] = torch.abs(
-            net_G_output['content_ab'] -
-            net_G_output['content_a'].detach()).mean()
-        self.gen_losses['content_recon_b'] = torch.abs(
-            net_G_output['content_ba'] -
-            net_G_output['content_b'].detach()).mean()
+        self.gen_losses['content_recon_a'] = \
+            self.criteria['content_recon'](net_G_output['content_ab'],
+                                           net_G_output['content_a'].detach())
+        self.gen_losses['style_recon_b'] = \
+            self.criteria['content_recon'](net_G_output['content_ba'],
+                                           net_G_output['content_b'].detach())
         self.gen_losses['content_recon'] = \
             self.gen_losses['content_recon_a'] + \
             self.gen_losses['content_recon_b']
-
-        if within_latent_recon:
-            self.gen_losses['content_recon_aa'] = torch.abs(
-                net_G_output['content_aa'] -
-                net_G_output['content_a'].detach()).mean()
-            self.gen_losses['content_recon_bb'] = torch.abs(
-                net_G_output['content_bb'] -
-                net_G_output['content_b'].detach()).mean()
-            self.gen_losses['content_recon_within'] = \
-                self.gen_losses['content_recon_aa'] + \
-                self.gen_losses['content_recon_bb']
 
         # KL loss
         self.gen_losses['kl'] = \
@@ -190,10 +168,10 @@ class Trainer(BaseTrainer):
         # Cycle reconstruction loss
         if cycle_recon:
             self.gen_losses['cycle_recon'] = \
-                torch.abs(net_G_output['images_aba'] -
-                          data['images_a']).mean() + \
-                torch.abs(net_G_output['images_bab'] -
-                          data['images_b']).mean()
+                self.criteria['image_recon'](net_G_output['images_aba'],
+                                             data['images_a']) + \
+                self.criteria['image_recon'](net_G_output['images_bab'],
+                                             data['images_b'])
 
         # Compute total loss
         total_loss = self._get_total_loss(gen_forward=True)
