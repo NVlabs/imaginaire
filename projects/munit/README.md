@@ -42,7 +42,7 @@ ${TRAINING_DATASET_ROOT_FOLDER}
 
 ### Training data preparation
 
-- Here we use dog and cat images in the publicly available animal face datasets (AFHQ) instead. The dataset is available (https://github.com/clovaai/stargan-v2) under Creative Commons BY-NC 4.0 license by NAVER Corporation. Download and extract the data
+- Here we use dog and cat images in the animal face datasets (AFHQ). The dataset is available (https://github.com/clovaai/stargan-v2) under Creative Commons BY-NC 4.0 license by NAVER Corporation. Download and extract the data
 
 ```bash
 python scripts/download_dataset.py --dataset afhq_dog2cat
