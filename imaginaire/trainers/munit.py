@@ -153,7 +153,7 @@ class Trainer(BaseTrainer):
         self.gen_losses['content_recon_a'] = \
             self.criteria['content_recon'](net_G_output['content_ab'],
                                            net_G_output['content_a'].detach())
-        self.gen_losses['style_recon_b'] = \
+        self.gen_losses['content_recon_b'] = \
             self.criteria['content_recon'](net_G_output['content_ba'],
                                            net_G_output['content_b'].detach())
         self.gen_losses['content_recon'] = \
