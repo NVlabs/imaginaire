@@ -16,20 +16,22 @@ class PerceptualLoss(nn.Module):
     r"""Perceptual loss initialization.
 
     Args:
-       cfg (Config): Configuration file.
-       network (str) : The name of the loss network: 'vgg16' | 'vgg19'.
-       layers (str or list of str) : The layers used to compute the loss.
-       weights (float or list of float : The loss weights of each layer.
-       criterion (str): The type of distance function: 'l1' | 'l2'.
-       resize (bool) : If ``True``, resize the input images to 224x224.
-       resize_mode (str): Algorithm used for resizing.
-       num_scales (int): The loss will be evaluated at original size and
-        this many times downsampled sizes.
+        cfg (Config): Configuration file.
+        network (str) : The name of the loss network: 'vgg16' | 'vgg19'.
+        layers (str or list of str) : The layers used to compute the loss.
+        weights (float or list of float : The loss weights of each layer.
+        criterion (str): The type of distance function: 'l1' | 'l2'.
+        resize (bool) : If ``True``, resize the input images to 224x224.
+        resize_mode (str): Algorithm used for resizing.
+        instance_normalized (bool): If ``True``, applies instance normalization
+            to the feature maps before computing the distance.
+        num_scales (int): The loss will be evaluated at original size and
+            this many times downsampled sizes.
     """
 
     def __init__(self, cfg, network='vgg19', layers='relu_4_1', weights=None,
                  criterion='l1', resize=False, resize_mode='bilinear',
-                 num_scales=1):
+                 instance_normalized=False, num_scales=1):
         super().__init__()
         if isinstance(layers, str):
             layers = [layers]
@@ -69,6 +71,7 @@ class PerceptualLoss(nn.Module):
             raise ValueError('Criterion %s is not recognized' % criterion)
         self.resize = resize
         self.resize_mode = resize_mode
+        self.instance_normalized = instance_normalized
         self.fp16 = cfg.trainer.amp == 'O1'
         print('Perceptual loss:')
         print('\tMode: {}'.format(network))
@@ -117,14 +120,14 @@ class PerceptualLoss(nn.Module):
                 # relu_3_1, 0.349977
                 # relu_4_1, 0.544188
                 # relu_5_1, 0.906261
-                # print('%s, %f' % (
-                #     layer,
-                #     weight * self.criterion(
-                #                  input_features[layer],
-                #                  target_features[
-                #                  layer].detach()).item()))
-                loss += weight * self.criterion(input_features[layer],
-                                                target_features[layer].detach())
+                input_feature = input_features[layer]
+                target_feature = target_features[layer].detach()
+                if self.instance_normalized:
+                    input_feature = F.instance_norm(input_feature)
+                    target_feature = F.instance_norm(target_feature)
+
+                loss += weight * self.criterion(input_feature,
+                                                target_feature)
             # Downsample the input and target.
             if scale != self.num_scales - 1:
                 inp = F.interpolate(

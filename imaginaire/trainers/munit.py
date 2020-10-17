@@ -74,7 +74,8 @@ class Trainer(BaseTrainer):
             self.criteria['perceptual'] = \
                 PerceptualLoss(cfg=cfg,
                                network=cfg.trainer.perceptual_mode,
-                               layers=cfg.trainer.perceptual_layers)
+                               layers=cfg.trainer.perceptual_layers,
+                               instance_normalized=True)
 
         for loss_name, loss_weight in cfg.trainer.loss_weight.__dict__.items():
             if loss_weight > 0:
