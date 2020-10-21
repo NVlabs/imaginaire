@@ -1,0 +1,283 @@
+pretrained_weight: 1aUKVWM7M84qsklafavaCqSK8oUHBzInA
+
+# How often do you want to save output images during training.
+image_save_iter: 500
+# How often do you want to save trained models.
+snapshot_save_epoch: 2
+# How often do you want to log the training stats.
+logging_iter: 100
+# Number of training epochs.
+max_epoch: 100
+# Number of epochs training single frame generator.
+single_frame_epoch: 0
+# How often to double the number of training frames in each clip.
+num_epochs_temporal_step: 20
+
+# Trainer options.
+trainer:
+    distributed_data_parallel: apex
+    type: imaginaire.trainers.wc_vid2vid
+    amp: O0
+    model_average: False
+    model_average_beta: 0.999
+    model_average_start_iteration: 500
+    model_average_batch_norm_estimation_iteration: 0
+    num_videos_to_test: 64
+    num_frames_per_video: 10
+
+    gan_mode: hinge
+    gan_relativistic: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_1_1', 'relu_2_1', 'relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.03125, 0.0625, 0.125, 0.25, 1.0]
+        fp16: True
+    loss_weight:
+        gan: 1.0
+        feature_matching: 10.0
+        temporal_gan: 0.0
+        perceptual: 10.0
+        flow: 10.0
+        guidance: 20.0
+    init:
+        type: xavier
+        gain: 0.02
+
+# Optimization options.
+gen_opt:
+    type: adam
+    lr: 0.0001
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 40
+        gamma: 0.1
+dis_opt:
+    type: adam
+    lr: 0.0004
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 40
+        gamma: 0.1
+
+
+# Model options.
+gen:
+    type: imaginaire.generators.wc_vid2vid
+    num_layers: 7
+    num_downsamples_img: 4
+    num_filters: 32
+    max_num_filters: 512
+    kernel_size: 3
+    activation_norm_type: spatially_adaptive
+    activation_norm_params:
+        activation_norm_type: instance
+        num_filters:
+            - 0
+            - 0
+            - 128
+        kernel_size: 3
+    weight_norm_type: spectral
+    style_dims: 256
+    use_segmap_as_input: True
+    flow:
+        num_filters: 32
+        max_num_filters: 512
+        num_downsamples: 5
+        num_res_blocks: 6
+        activation_norm_type: instance
+        weight_norm_type: spectral
+        flow_output_multiplier: 40
+        generate_raw_output: False
+        multi_spade_combine:
+            num_layers: 3
+            embed:
+                arch: unet
+                num_filters: 32
+                max_num_filters: 512
+                num_downsamples: 5
+                kernel_size: 3
+                weight_norm_type: spectral
+    guidance:
+        partial_conv: False
+        only_with_flow: True
+    single_image_model:
+      config: /mnt/workspace/single/mannequin/hed_all/configs/amallya/single/mannequin/hed_O0.yaml
+      checkpoint: /mnt/workspace/single/mannequin/hed_all/logs/2020_0826_0329_13_hed/fixed_head_epoch_00035_iteration_000644840_checkpoint.pt
+
+    embed:
+        use_embed: True
+        arch: encoderdecoder
+        num_filters: 32
+        max_num_filters: 512
+        num_downsamples: 5
+        kernel_size: 3
+        weight_norm_type: spectral
+
+dis:
+    type: imaginaire.discriminators.fs_vid2vid
+    image:
+        num_filters: 64
+        max_num_filters: 512
+        num_discriminators: 2
+        num_layers: 3
+        weight_norm_type: none
+        activation_norm_type: instance
+flow_network:
+    type: imaginaire.third_party.flow_net.flow_net
+
+# Data options.
+data:
+    # Name of this dataset.
+    name: 'mannequin'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_videos
+    num_frames_G: 3
+    num_frames_D: 3
+
+    # How many data loading workers per GPU?
+    num_workers: 1
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - seg_maps-densepose:
+            ext: png
+            num_channels: 25
+            interpolator: NEAREST
+        - depth_maps-megadepth:
+            ext: png
+            num_channels: 3
+            interpolator: BILINEAR
+        - edge_maps-hed:
+            ext: png
+            num_channels: 1
+            interpolator: BILINEAR
+        - pose_maps-densepose:
+            ext: png
+            num_channels: 3
+            interpolator: NEAREST
+            normalize: True
+        - pose_maps-openpose:
+            ext: png
+            num_channels: 3
+            interpolator: NEAREST
+            normalize: True
+        - unprojections:
+            ext: pkl
+            post_aug_ops: convert::imaginaire.model_utils.wc_vid2vid.render::decode_unprojections
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps-densepose
+        - depth_maps-megadepth
+        - edge_maps-hed
+        - pose_maps-densepose
+        - pose_maps-openpose
+
+    # Train dataset details.
+    train:
+        # Input LMDBs.
+        roots:
+            - /mnt/bigdata01/datasets/wc_vid2vid/mannequin/train/lmdb
+        # Batch size per GPU.
+        batch_size: 1
+        initial_sequence_length: 4
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False
+
+    # Validation dataset details.
+    val:
+        # Input LMDBs.
+        roots:
+            - /mnt/bigdata01/datasets/wc_vid2vid/mannequin/test/lmdb
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False
+
+# Data options.
+test_data:
+    # Name of this dataset.
+    name: 'mannequin'
+    # Which dataloader to use?
+    type: imaginaire.datasets.paired_videos
+    num_frames_G: 3
+    num_frames_D: 3
+
+    # How many data loading workers per GPU?
+    num_workers: 1
+
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            interpolator: BILINEAR
+            normalize: True
+        - seg_maps-densepose:
+            ext: png
+            num_channels: 25
+            interpolator: NEAREST
+        - depth_maps-megadepth:
+            ext: png
+            num_channels: 3
+            interpolator: BILINEAR
+        - edge_maps-hed:
+            ext: png
+            num_channels: 1
+            interpolator: BILINEAR
+        - pose_maps-densepose:
+            ext: png
+            num_channels: 3
+            interpolator: NEAREST
+            normalize: True
+        - pose_maps-openpose:
+            ext: png
+            num_channels: 3
+            interpolator: NEAREST
+            normalize: True
+        - unprojections:
+            ext: pkl
+            post_aug_ops: convert::imaginaire.model_utils.wc_vid2vid.render::decode_unprojections
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Which labels to be concatenated as final output label from dataloader.
+    input_labels:
+        - seg_maps-densepose
+        - depth_maps-megadepth
+        - edge_maps-hed
+        - pose_maps-densepose
+        - pose_maps-openpose
+
+    # Test dataset details.
+    paired: True
+    test:
+        is_lmdb: False
+        # Input LMDBs.
+        roots:
+            - projects/wc_vid2vid_mannequin/test_data/mannequin
+        # Batch size per GPU.
+        batch_size: 1
+        # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
+        augmentations:
+            resize_h_w: 512, 1024
+            horizontal_flip: False
