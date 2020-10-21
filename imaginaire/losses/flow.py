@@ -1,7 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
-#
-# This work is made available under the Nvidia Source Code License-NC.
-# To view a copy of this license, check out LICENSE.md
+# share: outside-ok
 # flake8: noqa
 import importlib
 import warnings
@@ -211,8 +208,8 @@ class FlowLoss(nn.Module):
         Returns:
             (dict):
               - loss_flow_L1 (tensor): L1 loss compared to ground truth flow.
-              - loss_flow_warp (tensor): L1 loss between the warped image and the 
-                target image when using the flow to warp.
+              - loss_flow_warp (tensor): L1 loss between the warped image and
+              the target image when using the flow to warp.
         """
         loss_flow_L1 = torch.tensor(0., device=torch.device('cuda'))
         loss_flow_warp = torch.tensor(0., device=torch.device('cuda'))

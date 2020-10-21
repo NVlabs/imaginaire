@@ -1,7 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
-#
-# This work is made available under the Nvidia Source Code License-NC.
-# To view a copy of this license, check out LICENSE.md
+# share: outside-ok
 # Copyright (C) 2020 NVIDIA Corporation.  All rights reserved
 import numpy as np
 import torch
@@ -99,36 +96,36 @@ class Generator(Vid2VidGenerator):
     def get_guidance_images_and_masks(self, unprojection):
         r"""Do stuff."""
 
-        for resolution, point_info in unprojection.items():
-            if resolution != 'w1024xh512':
-                continue
+        resolution = 'w1024xh512'
+        point_info = unprojection[resolution]
 
-            w, h = resolution.split('x')
-            w, h = int(w[1:]), int(h[1:])
+        w, h = resolution.split('x')
+        w, h = int(w[1:]), int(h[1:])
 
-            # This returns guidance image in [0-255] RGB.
-            # We will convert it into Tensor repr. below.
-            guidance_image, guidance_mask = self.renderer.render_image(
-                point_info, w, h, return_mask=True)
+        # This returns guidance image in [0-255] RGB.
+        # We will convert it into Tensor repr. below.
+        guidance_image, guidance_mask = self.renderer.render_image(
+            point_info, w, h, return_mask=True)
 
-            # If mask is None, there is no guidance.
-            if np.sum(guidance_mask) == 0:
-                return None, point_info
+        # If mask is None, there is no guidance.
+        # print(np.sum(guidance_mask), guidance_mask.size)
+        # if np.sum(guidance_mask) == 0:
+        #     return None, point_info
 
-            # Flip guidance image and guidance mask if needed.
-            if self.is_flipped_input:
-                guidance_image = np.fliplr(guidance_image).copy()
-                guidance_mask = np.fliplr(guidance_mask).copy()
+        # Flip guidance image and guidance mask if needed.
+        if self.is_flipped_input:
+            guidance_image = np.fliplr(guidance_image).copy()
+            guidance_mask = np.fliplr(guidance_mask).copy()
 
-            # Go from (h, w, c) to (1, c, h, w).
-            # Convert guidance image to Tensor.
-            guidance_image = (transforms.ToTensor()(guidance_image) - 0.5) * 2
-            guidance_mask = transforms.ToTensor()(guidance_mask)
-            guidance = torch.cat((guidance_image, guidance_mask), dim=0)
-            guidance = guidance.unsqueeze(0).cuda()
+        # Go from (h, w, c) to (1, c, h, w).
+        # Convert guidance image to Tensor.
+        guidance_image = (transforms.ToTensor()(guidance_image) - 0.5) * 2
+        guidance_mask = transforms.ToTensor()(guidance_mask)
+        guidance = torch.cat((guidance_image, guidance_mask), dim=0)
+        guidance = guidance.unsqueeze(0).cuda()
 
-            # Save guidance at all resolutions.
-            guidance_images_and_masks = guidance
+        # Save guidance at all resolutions.
+        guidance_images_and_masks = guidance
 
         return guidance_images_and_masks, point_info
 

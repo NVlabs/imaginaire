@@ -227,7 +227,7 @@ test_data:
         is_lmdb: False
         # Input LMDBs.
         roots:
-            - projects/wc_vid2vid/test_data/cityscapes
+            - projects/wc_vid2vid_cityscapes/test_data/cityscapes
         # Batch size per GPU.
         batch_size: 1
         # If resize_h_w is not given, then it is assumed to be same as crop_h_w.

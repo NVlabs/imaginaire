@@ -1,7 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
-#
-# This work is made available under the Nvidia Source Code License-NC.
-# To view a copy of this license, check out LICENSE.md
+# share: outside-ok
 # Copyright (C) 2020 NVIDIA Corporation.  All rights reserved
 import os
 import time
@@ -129,7 +126,7 @@ class Trainer(Vid2VidTrainer):
             # Go over all frames of this sequence.
             video = []
             for idx, data in enumerate(tqdm(loader)):
-                key = data['key']['seg_maps'][0][0]
+                key = data['key']['images'][0][0]
                 filename = key.split('/')[-1]
 
                 # Create output dir for this sequence.
