@@ -25,7 +25,8 @@ pip install jupyterlab --upgrade
 pip install scikit-image tqdm wget
 pip install cython pyyaml lmdb
 pip install opencv-python opencv-contrib-python
-pip install open3d albumentations requests
+pip install open3d requests
+pip install albumentations>=5.1.0
 pip install qimage2ndarray
 pip install imageio-ffmpeg
 pip install face-alignment dlib
