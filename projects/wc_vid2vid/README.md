@@ -61,7 +61,7 @@ cityscapes
         ...
     ...
 ```
-We will provide the scripts to perform SfM and generate the unprojection files required by wc_vid2vid in a future update.
+The scripts to perform SfM and generate the unprojection files are attached in this comment: https://github.com/NVlabs/imaginaire/issues/5#issuecomment-720146998.
 
 - Preprocess the data into LMDB format
 
