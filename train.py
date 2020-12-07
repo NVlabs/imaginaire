@@ -24,6 +24,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--single_gpu', action='store_true')
+    parser.add_argument('--resume', action='store_true')
     parser.add_argument('--num_workers', type=int)
     args = parser.parse_args()
     return args
@@ -61,7 +62,7 @@ def main():
                           sch_G, sch_D,
                           train_data_loader, val_data_loader)
     current_epoch, current_iteration = trainer.load_checkpoint(
-        cfg, args.checkpoint)
+        cfg, args.checkpoint,resume=args.resume)
 
     # Start training.
     for epoch in range(current_epoch, cfg.max_epoch):
