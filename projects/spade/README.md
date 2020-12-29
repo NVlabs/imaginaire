@@ -64,7 +64,8 @@ python scripts/build_lmdb.py \
 --config configs/projects/spade/cocostuff/base128_bs4.yaml \
 --data_root dataset/cocostuff_raw/${f} \
 --output_root dataset/cocostuff/${f} \
---overwrite
+--overwrite \
+--paired
 done
 ```
 
