@@ -56,7 +56,8 @@ python scripts/build_lmdb.py \
 --config configs/projects/pix2pixhd/cityscapes/ampO1.yaml \
 --data_root dataset/cityscapes_raw/${f} \
 --output_root dataset/cityscapes/${f} \
---overwrite
+--overwrite \
+--paired
 done
 ```
 
