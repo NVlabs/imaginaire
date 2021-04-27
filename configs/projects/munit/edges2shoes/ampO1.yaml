@@ -75,7 +75,7 @@ dis:
 # Data options.
 data:
     # Name of this dataset.
-    name: afhq_dog2cat
+    name: edges2shoes
     # Which dataloader to use?
     type: imaginaire.datasets.unpaired_images
     # How many data loading workers per GPU?
