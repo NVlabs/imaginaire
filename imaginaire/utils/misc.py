@@ -9,8 +9,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.stats import truncnorm
-from torch._six import container_abcs, string_classes
+from torch._six import string_classes
 
+TORCH_MAJOR = int(torch.__version__.split('.')[0])
+TORCH_MINOR = int(torch.__version__.split('.')[1])
+
+if TORCH_MAJOR == 1 and TORCH_MINOR < 8:
+    from torch._six import container_abcs
+else:
+    import collections.abc as container_abcs
 
 def split_labels(labels, label_lengths):
     r"""Split concatenated labels into their parts.
