@@ -46,7 +46,7 @@ We have a tutorial for each model. Click on the model name, and your browser sho
 |Algorithm Name                               | Feature                                                                                                         | Publication                                                   |
 |:--------------------------------------------|:----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------:|
 |[vid2vid](projects/vid2vid/README.md)         | Learn a mapping that converts a semantic video to a photorealistic video.                                       |    [Wang et. al. NeurIPS 2018](https://arxiv.org/abs/1808.06601) |
-|[fs-vid2vid](projects/fs_vid2vid/README.md)   | Learn a subject-agnostic mapping that converts a semantic video and an example image to a photoreslitic video.  |    [Wang et. al. NeurIPS 2019](https://arxiv.org/abs/1808.06601) |
+|[fs-vid2vid](projects/fs_vid2vid/README.md)   | Learn a subject-agnostic mapping that converts a semantic video and an example image to a photoreslitic video.  |    [Wang et. al. NeurIPS 2019](https://arxiv.org/abs/1910.12713) |
 |[wc-vid2vid](projects/wc_vid2vid/README.md)   | Improve vid2vid on view consistency and long-term consistency.                                                  |    [Mallya et. al. ECCV 2020](https://arxiv.org/abs/2007.08509) |
 
 
