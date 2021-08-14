@@ -93,12 +93,12 @@ class tofp32(nn.Module):
 
 def init_deconv_bilinear(weight):
     f_shape = weight.size()
-    heigh, width = f_shape[-2], f_shape[-1]
+    height, width = f_shape[-2], f_shape[-1]
     f = np.ceil(width / 2.0)
     c = (2 * f - 1 - f % 2) / (2.0 * f)
-    bilinear = np.zeros([heigh, width])
+    bilinear = np.zeros([height, width])
     for x in range(width):
-        for y in range(heigh):
+        for y in range(height):
             value = (1 - abs(x / f - c)) * (1 - abs(y / f - c))
             bilinear[x, y] = value
     weight.data.fill_(0.)
