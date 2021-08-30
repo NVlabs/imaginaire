@@ -23,6 +23,8 @@ For installation, please checkout [INSTALL.md](../../INSTALL.md).
 ## Hardware Requirement
 We trained our models using an NVIDIA DGX1 with 8 V100 32GB GPUs. You can try to use fewer GPUs or reduce the batch size if it does not fit in your GPU memory, but training stability and image quality cannot be guaranteed.
 
+## Training
+The procedure for training is very similar to the procedure of training for [MUNIT](../munit/README.md). Please checkout [the project page of MUNIT](../munit/README.md) for details.
 
 ## Inference
 - Download a small set of test examples
