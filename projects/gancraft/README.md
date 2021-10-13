@@ -6,7 +6,7 @@
 [Video](https://www.youtube.com/watch?v=1Hky092CGFQ) |
 [Two Minute Papers Video](https://www.youtube.com/watch?v=jl0XCslxwB0)
 
-<img src="https://nvlabs.github.io/GANcraft/videos/island.gif" alt="teaser" width="400"/>
+<img src="https://nvlabs.github.io/GANcraft/videos/island_small.gif" alt="teaser" width="400"/>
 
 ## License
 
