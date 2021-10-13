@@ -264,6 +264,7 @@ class StyleEncoder(nn.Module):
 
     def forward(self, input_x):
         r"""SPADE Style Encoder forward.
+
         Args:
             input_x (N x 3 x H x W tensor): input images.
         Returns:

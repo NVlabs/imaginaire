@@ -125,8 +125,9 @@ class Generator(Base3DGenerator):
                         raise NotImplementedError(
                             'Unknown self.camera_sampler_type: {}'.format(self.camera_sampler_type))
                     # Run ray-voxel intersection test
-                    """Ray-voxel intersection CUDA kernel
+                    r"""Ray-voxel intersection CUDA kernel.
                     Note: voxel_id = 0 and depth2 = NaN if there is no intersection along the ray
+
                     Args:
                         voxel_t (Y x 512 x 512 tensor, int32): Full 3D voxel of MC block IDs.
                         cam_ori_t (3 tensor): Camera origin.
@@ -138,9 +139,9 @@ class Generator(Base3DGenerator):
                         max_samples (int): Maximum number of blocks intersected along the ray before stopping.
                     Returns:
                         voxel_id (    img_dims[0] x img_dims[1] x max_samples x 1 tensor): IDs of intersected tensors
-                            along each ray
+                        along each ray
                         depth2   (2 x img_dims[0] x img_dims[1] x max_samples x 1 tensor): Depths of entrance and exit
-                            points for each ray-voxel intersection.
+                        points for each ray-voxel intersection.
                         raydirs  (    img_dims[0] x img_dims[1] x 1 x 3 tensor): The direction of each ray.
 
                     """
@@ -182,7 +183,7 @@ class Generator(Base3DGenerator):
         Args:
             pseudo_gen (callable): Function converting mask to image using img2img network.
             voxel_id (N x img_dims[0] x img_dims[1] x max_samples x 1 tensor): IDs of intersected tensors along
-                each ray.
+            each ray.
             z (N x C tensor): Optional style code passed to pseudo_gen.
             style_img (N x 3 x H x W tensor): Optional style image passed to pseudo_gen.
             resize_512 (bool): If True, evaluate pseudo_gen at 512x512 regardless of input resolution.
@@ -245,7 +246,7 @@ class Generator(Base3DGenerator):
             ret (dict):
                 voxel_id (N x H x W x max_samples x 1 tensor): IDs of intersected tensors along each ray.
                 depth2 (N x 2 x H x W x max_samples x 1 tensor): Depths of entrance and exit points for each ray-voxel
-                    intersection.
+                intersection.
                 raydirs (N x H x W x 1 x 3 tensor): The direction of each ray.
                 cam_ori_t (N x 3 tensor): Camera origins.
                 pseudo_real_img (N x 3 x H x W tensor): Pseudo-ground truth image.
@@ -309,7 +310,7 @@ class Generator(Base3DGenerator):
                 images (N x 3 x H x W tensor) : Real images
                 voxel_id (N x H x W x max_samples x 1 tensor): IDs of intersected tensors along each ray.
                 depth2 (N x 2 x H x W x max_samples x 1 tensor): Depths of entrance and exit points for each ray-voxel
-                    sintersection.
+                intersection.
                 raydirs (N x H x W x 1 x 3 tensor): The direction of each ray.
                 cam_ori_t (N x 3 tensor): Camera origins.
             random_style (bool): Whether to sample a random style vector.
@@ -375,18 +376,19 @@ class Generator(Base3DGenerator):
                   resolution_hw=[540, 960],
                   cam_ang=72,
                   cam_maxstep=10):
-        r"""Compute result images according to the provided camera trajectory and save the results in the
-        specified folder. The full image is evaluated in multiple tiles to save memory.
+        r"""Compute result images according to the provided camera trajectory and save the results in the specified
+        folder. The full image is evaluated in multiple tiles to save memory.
+
         Args:
             output_dir (str): Where should the results be stored.
             camera_mode (int): Which camera trajectory to use.
             style_img_path (str): Path to the style-conditioning image.
-            seed (int): Random seed (controls style when style_image_path is not specified)
+            seed (int): Random seed (controls style when style_image_path is not specified).
             pad (int): Pixels to remove from the image tiles before stitching. Should be equal or larger than the
-                receptive field of the CNN to avoid border artifact.
-            num_samples (int): Number of samples per ray (different from training)
+            receptive field of the CNN to avoid border artifact.
+            num_samples (int): Number of samples per ray (different from training).
             num_blocks_early_stop (int): Max number of intersected boxes per ray before stopping
-                (different from training).
+            (different from training).
             sample_depth (float): Max distance traveled through boxes before stopping (different from training).
             tile_size (int): Max size of a tile in pixels.
             resolution_hw (list [H, W]): Resolution of the output image.

@@ -15,6 +15,7 @@ from imaginaire.utils.distributed import master_only_print as print
 
 class Discriminator(nn.Module):
     r"""Multi-resolution patch discriminator. Based on FPSE discriminator but with N+1 labels.
+
     Args:
         dis_cfg (obj): Discriminator definition part of the yaml config file.
         data_cfg (obj): Data definition part of the yaml config file.
@@ -41,14 +42,6 @@ class Discriminator(nn.Module):
 
         if not self.use_label:
             num_labels = 2  # ignore + true
-
-        print('*************************************************')
-        print('*                                               *')
-        print('*      GANcraft Discriminator Initialized       *')
-        print('*      image_channels: {}, num_labels: {}       *'.format(image_channels, num_labels))
-        print('*                 use_label: {}               *'.format(self.use_label))
-        print('*                                               *')
-        print('*************************************************')
 
         # Build the discriminator.
         num_filters = getattr(dis_cfg, 'num_filters', 128)
@@ -79,6 +72,7 @@ class Discriminator(nn.Module):
 
     def forward(self, data, net_G_output, weights=None, incl_real=False, incl_pseudo_real=False):
         r"""GANcraft discriminator forward.
+
         Args:
             data (dict):
               - data  (N x C1 x H x W tensor) : Ground truth images.
@@ -88,12 +82,14 @@ class Discriminator(nn.Module):
               - fake_images  (N x C1 x H x W tensor) : Fake images.
         Returns:
             output_x (dict):
-              - real_outputs (list): list of output tensors produced by individual patch discriminators for real images.
+              - real_outputs (list): list of output tensors produced by
+                individual patch discriminators for real images.
               - real_features (list): list of lists of features produced by
-                    individual patch discriminators for real images.
-              - fake_outputs (list): list of output tensors produced by individual patch discriminators for fake images.
+                individual patch discriminators for real images.
+              - fake_outputs (list): list of output tensors produced by
+                individual patch discriminators for fake images.
               - fake_features (list): list of lists of features produced by
-                    individual patch discriminators for fake images.
+                individual patch discriminators for fake images.
         """
         output_x = dict()
 
@@ -135,7 +131,6 @@ class Discriminator(nn.Module):
 
 
 class FPSEDiscriminator(nn.Module):
-
     def __init__(self,
                  num_input_channels,
                  num_labels,
@@ -220,8 +215,11 @@ class FPSEDiscriminator(nn.Module):
 
     @staticmethod
     def smooth_interp(x, size):
-        r"""
-        x: [1, 12, 256, 256]
+        r"""Smooth interpolation of segmentation maps.
+
+        Args:
+            x (4D tensor): Segmentation maps.
+            size(2D list): Target size (H, W).
         """
         x = F.interpolate(x, size=size, mode='area')
         onehot_idx = torch.argmax(x, dim=-3, keepdims=True)

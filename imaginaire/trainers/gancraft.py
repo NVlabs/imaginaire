@@ -44,12 +44,12 @@ class GauGANLoader(object):
 
     def eval(self, label, z=None, style_img=None):
         r"""Produce output given segmentation and other conditioning inputs.
+        random style will be used if neither z nor style_img is provided.
 
         Args:
-            label (torch.Tensor): One-hot segmentation mask of shape (N, C, H, W).
+            label (N x C x H x W tensor): One-hot segmentation mask of shape.
             z: Style vector.
             style_img: Style image.
-            random style will be used if neither z nor style_img is provided.
         """
         inputs = {'label': label[:, :-1].detach().half()}
         random_style = True
@@ -163,23 +163,6 @@ class Trainer(BaseTrainer):
             data (dict): Training data at the current iteration.
         """
         net_G_output = self.net_G(data, random_style=False)
-
-        r"""
-        net_D inputs:
-            real:
-                data['images']
-                net_G_output['real_labels'] > data['label']
-            fake:
-                net_G_output['fake_images']
-                net_G_output['fake_labels']
-            preal:
-                net_G_output['pseudo_real_img']
-                net_G_output['fake_labels']
-
-        output_x['fake_outputs'], output_x['fake_features']
-        output_x['real_outputs'], output_x['real_features']
-        output_x['pseudo_real_outputs'], output_x['pseudo_real_features']
-        """
 
         self._time_before_loss()
 
@@ -311,7 +294,7 @@ class Trainer(BaseTrainer):
             cfg (obj): Global configuration.
             checkpoint_path (str): Path to the checkpoint.
             resume (bool or None): If not ``None``, will determine whether or
-                not to load optimizers in addition to network weights.
+            not to load optimizers in addition to network weights.
         """
         ret = super().load_checkpoint(cfg, checkpoint_path, resume, load_sch)
 

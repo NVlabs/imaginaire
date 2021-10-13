@@ -404,8 +404,7 @@ class TourCameraController:
 
 
 def rand_camera_pose_birdseye(voxel, border=128):
-    r"""
-    Generating random camera pose in the upper hemisphere, in the format of origin-direction-up
+    r"""Generating random camera pose in the upper hemisphere, in the format of origin-direction-up
     Assuming [Y X Z] coordinate. Y is negative gravity direction.
     The camera pose is converted into the voxel coordinate system so that it can be used directly for rendering
     1. Uniformly sample a point on the upper hemisphere of a unit sphere, as cam_ori.
@@ -449,9 +448,7 @@ def get_neighbor_height(heightmap, loc0, loc1, minheight, neighbor_size=7):
 
 
 def rand_camera_pose_firstperson(voxel, border=128):
-    r"""
-    Generating random camera pose in the upper hemisphere, in the format of origin-direction-up
-    1. Uniformly sample a point on the upper hemisphere of a unit sphere.
+    r"""Generating random camera pose in the upper hemisphere, in the format of origin-direction-up
     """
     r = np.random.rand(5)
     r[0] *= voxel.voxel_t.size(1)-border-border
@@ -568,7 +565,6 @@ def rand_camera_pose_thridperson3(voxel, border=64):
 
 
 def rand_camera_pose_tour(voxel):
-    r"""Derived from the test camera pose."""
     size = min(voxel.voxel_t.size(1), voxel.voxel_t.size(2)) / 2
     center = [voxel.voxel_t.size(1)/2, voxel.voxel_t.size(2)/2]
 
@@ -608,7 +604,6 @@ def rand_camera_pose_tour(voxel):
 
 
 def rand_camera_pose_insideout(voxel):
-    r"""Derived from the test camera pose."""
     size = min(voxel.voxel_t.size(1), voxel.voxel_t.size(2)) / 2
     center = [voxel.voxel_t.size(1)/2, voxel.voxel_t.size(2)/2]
 

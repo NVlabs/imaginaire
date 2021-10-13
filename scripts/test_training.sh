@@ -55,6 +55,18 @@ if test -f "$CONFIG"; then
   output
 fi
 
+CONFIG=configs/unit_test/biggan.yaml
+if test -f "$CONFIG"; then
+  cmd="${BASE_CMD} --config $CONFIG >> ${LOG} "
+  output
+fi
+
+CONFIG=configs/unit_test/stylegan.yaml
+if test -f "$CONFIG"; then
+  cmd="${BASE_CMD} --config $CONFIG >> ${LOG} "
+  output
+fi
+
 CONFIG=configs/unit_test/vid2vid_street.yaml
 if test -f "$CONFIG"; then
   cmd="python train.py --single_gpu --config $CONFIG >> ${LOG} "
@@ -80,6 +92,18 @@ if test -f "$CONFIG"; then
 fi
 
 CONFIG=configs/unit_test/wc_vid2vid.yaml
+if test -f "$CONFIG"; then
+  cmd="${BASE_CMD} --config $CONFIG >> ${LOG} "
+  output
+fi
+
+CONFIG=configs/unit_test/first_order_motion.yaml
+if test -f "$CONFIG"; then
+  cmd="${BASE_CMD} --config $CONFIG >> ${LOG} "
+  output
+fi
+
+CONFIG=configs/unit_test/face_vid2vid.yaml
 if test -f "$CONFIG"; then
   cmd="${BASE_CMD} --config $CONFIG >> ${LOG} "
   output

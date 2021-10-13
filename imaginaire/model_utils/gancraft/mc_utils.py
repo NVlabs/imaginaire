@@ -27,8 +27,8 @@ def load_voxel_new(voxel_path, shape=[256, 512, 512]):
 
 
 def gen_corner_voxel(voxel):
-    r"""Converting voxel center array to voxel corner array. The size of the produced array grows by 1 on
-    every dimension.
+    r"""Converting voxel center array to voxel corner array. The size of the
+    produced array grows by 1 on every dimension.
 
     Args:
         voxel (torch.IntTensor, CPU): Input voxel of three dimensions
@@ -46,9 +46,9 @@ def calc_height_map(voxel_t):
     The height is defined as the Y index of the surface (non-air) block
 
     Args:
-        voxel (torch.IntTensor, CPU) [Y, X, Z]: Input voxel of three dimensions
+        voxel (Y x X x Z torch.IntTensor, CPU): Input voxel of three dimensions
     Output:
-        heightmap [X, Z]
+        heightmap (X x Z torch.IntTensor)
     """
     start_time = time.time()
     m, h = torch.max((torch.flip(voxel_t, [0]) != 0).int(), dim=0, keepdim=False)
@@ -66,9 +66,9 @@ def trans_vec_homo(m, v, is_vec=False):
     Note that this function does not support autograd.
 
     Args:
-        m: a homogeneous matrix of [4, 4]
-        v: a 3-d vector
-        vec: if true, v is direction. Otherwise v is point
+        m (4 x 4 tensor): a homogeneous matrix
+        v (3 tensor): a 3-d vector
+        vec (bool): if true, v is direction. Otherwise v is point
     """
     if is_vec:
         v = torch.tensor([v[0], v[1], v[2], 0], dtype=v.dtype)
@@ -82,30 +82,27 @@ def trans_vec_homo(m, v, is_vec=False):
 
 
 def cumsum_exclusive(tensor, dim):
-    # Compute regular cumprod first (this is equivalent to `tf.math.cumsum(..., exclusive=False)`).
     cumsum = torch.cumsum(tensor, dim)
-    # "Roll" the elements along dimension 'dim' by 1 element.
     cumsum = torch.roll(cumsum, 1, dim)
-    # Replace the first element by "1" as this is what tf.cumprod(..., exclusive=True) does.
     cumsum.index_fill_(dim, torch.tensor([0], dtype=torch.long, device=tensor.device), 0)
     return cumsum
 
-# using proper midpoint rule
-
 
 def sample_depth_batched(depth2, nsamples, deterministic=False, use_box_boundaries=True, sample_depth=4):
-    r"""Make best effort to sample points within the same distance for every ray.
+    r"""    Make best effort to sample points within the same distance for every ray.
     Exception: When there is not enough voxel.
-    depth2: [N, 2, 256, 256, 4, 1]
-        - N: Batch
-        - 2: Entrance / exit depth for each intersected box
-        - 256, 256: Height, Width
-        - 4: Number of intersected boxes along the ray
-        - 1: One extra dim for consistent tensor dims
-    depth2 can include NaNs
-    deterministic: bool whether to use equal-distance sampling instead of random stratified sampling
-    use_box_boundaries: bool whether to add the entrance / exit points into the sample
-    sample_depth: Truncate the ray when it travels further than sample_depth inside voxels.
+
+    Args:
+        depth2 (N x 2 x 256 x 256 x 4 x 1 tensor):
+        - N: Batch.
+        - 2: Entrance / exit depth for each intersected box.
+        - 256, 256: Height, Width.
+        - 4: Number of intersected boxes along the ray.
+        - 1: One extra dim for consistent tensor dims.
+        depth2 can include NaNs.
+        deterministic (bool): Whether to use equal-distance sampling instead of random stratified sampling.
+        use_box_boundaries (bool): Whether to add the entrance / exit points into the sample.
+        sample_depth (float): Truncate the ray when it travels further than sample_depth inside voxels.
     """
 
     bs = depth2.size(0)
@@ -164,7 +161,6 @@ def sample_depth_batched(depth2, nsamples, deterministic=False, use_box_boundari
 
 
 def volum_rendering_relu(sigma, dists, dim=2):
-    r"""sigma: density predicted by the network."""
     free_energy = F.relu(sigma) * dists
 
     a = 1 - torch.exp(-free_energy.float())  # probability of it is not empty here
@@ -288,7 +284,7 @@ class MCLabelTranslator:
             else:
                 id2ggcolor_lut[k] = 0
 
-            # Generate id2cocoidx
+        # Generate id2cocoidx
         id2cocoidx_lut = {}
         for k, v in id2glbl_lut.items():
             if v:
@@ -301,7 +297,6 @@ class MCLabelTranslator:
         self.id2glbl_lut = id2glbl_lut
         self.id2ggcolor_lut = id2ggcolor_lut
         self.id2cocoidx_lut = id2cocoidx_lut
-        # print(id2cocoidx_lut)
 
         if True:
             mapper = ReducedLabelMapper()
@@ -353,7 +348,11 @@ class MCLabelTranslator:
         return color
 
     def mc_color(self, img):
-        r"""Expected input: H W 1, int32."""
+        r"""Obtaining Minecraft default color.
+
+        Args:
+            img (H x W x 1 int32 numpy tensor): Segmentation map.
+        """
         lut = self.id2color_lut
         lut = list(zip(*sorted([(k, v) for k, v in lut.items()])))[1]
         lut = np.array(lut, dtype=np.uint32)
@@ -365,7 +364,7 @@ class MCLabelTranslator:
 
 def rand_crop(cam_c, cam_res, target_res):
     r"""Produces a new cam_c so that the effect of rendering with the new cam_c and target_res is the same as rendering
-        with the old parameters and then crop out target_res.
+    with the old parameters and then crop out target_res.
     """
     d0 = np.random.randint(cam_res[0] - target_res[0] + 1)
     d1 = np.random.randint(cam_res[1] - target_res[1] + 1)

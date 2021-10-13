@@ -66,7 +66,7 @@ class AffineMod(nn.Module):
 class ModLinear(nn.Module):
     r"""Linear layer with affine modulation (Based on StyleGAN2 mod demod).
     Equivalent to affine modulation following linear, but faster when the same modulation parameters are shared across
-        multiple inputs.
+    multiple inputs.
     Args:
         in_features (int): Number of input features.
         out_features (int): Number of output features.
