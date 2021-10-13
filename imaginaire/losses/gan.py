@@ -1,7 +1,8 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,26 +36,34 @@ class GANLoss(nn.Module):
             ``'non_saturated'``, ``'wasserstein'``.
         target_real_label (float): The desired output label for real images.
         target_fake_label (float): The desired output label for fake images.
+        decay_k (float): The decay factor per epoch for top-k training.
+        min_k (float): The minimum percentage of samples to select.
+        separate_topk (bool): If ``True``, selects top-k for each sample
+            separately, otherwise selects top-k among all samples.
     """
-
-    def __init__(self, gan_mode, target_real_label=1.0, target_fake_label=0.0):
+    def __init__(self, gan_mode, target_real_label=1.0, target_fake_label=0.0,
+                 decay_k=1., min_k=1., separate_topk=False):
         super(GANLoss, self).__init__()
         self.real_label = target_real_label
         self.fake_label = target_fake_label
         self.real_label_tensor = None
         self.fake_label_tensor = None
         self.gan_mode = gan_mode
+        self.decay_k = decay_k
+        self.min_k = min_k
+        self.separate_topk = separate_topk
+        self.register_buffer('k', torch.tensor(1.0))
         print('GAN mode: %s' % gan_mode)
 
-    def forward(self, dis_output, t_real, dis_update=True):
+    def forward(self, dis_output, t_real, dis_update=True, reduce=True):
         r"""GAN loss computation.
 
         Args:
             dis_output (tensor or list of tensors): Discriminator outputs.
-            t_real (bool): If ``True``, uses the real label as target, otherwise
-                uses the fake label as target.
-            dis_update (bool): If ``True``, the loss will be used to update the
-                discriminator, otherwise the generator.
+            t_real (bool): If ``True``, uses the real label as target, otherwise uses the fake label as target.
+            dis_update (bool): If ``True``, the loss will be used to update the discriminator, otherwise the generator.
+            reduce (bool): If ``True``, when a list of discriminator outputs are provided, it will return the average
+                of all losses, otherwise it will return a list of losses.
         Returns:
             loss (tensor): Loss value.
         """
@@ -64,11 +73,14 @@ class GANLoss(nn.Module):
             # (batch size and number of locations) then averaged across scales,
             # so that the gradient is not dominated by the discriminator that
             # has the most output values (highest resolution).
-            loss = 0
+            losses = []
             for dis_output_i in dis_output:
                 assert isinstance(dis_output_i, torch.Tensor)
-                loss += self.loss(dis_output_i, t_real, dis_update)
-            return loss / len(dis_output)
+                losses.append(self.loss(dis_output_i, t_real, dis_update))
+            if reduce:
+                return torch.mean(torch.stack(losses))
+            else:
+                return losses
         else:
             return self.loss(dis_output, t_real, dis_update)
 
@@ -86,6 +98,24 @@ class GANLoss(nn.Module):
         if not dis_update:
             assert t_real, \
                 "The target should be real when updating the generator."
+
+        if not dis_update and self.k < 1:
+            r"""
+            Use top-k training:
+            "Top-k Training of GANs: Improving GAN Performance by Throwing
+            Away Bad Samples"
+            Here, each sample may have multiple discriminator output values
+            (patch discriminator). We could either select top-k for each sample
+            separately (when ``self.separate_topk=True``), or collect values
+            from all samples and then select top-k (default, when
+            ``self.separate_topk=False``).
+            """
+            if self.separate_topk:
+                dis_output = dis_output.view(dis_output.size(0), -1)
+            else:
+                dis_output = dis_output.view(-1)
+            k = math.ceil(self.k * dis_output.size(-1))
+            dis_output, _ = torch.topk(dis_output, k)
 
         if self.gan_mode == 'non_saturated':
             target_tensor = self.get_target_tensor(dis_output, t_real)
@@ -107,6 +137,10 @@ class GANLoss(nn.Module):
                 loss = -torch.mean(dis_output)
             else:
                 loss = torch.mean(dis_output)
+        elif self.gan_mode == 'softplus':
+            target_tensor = self.get_target_tensor(dis_output, t_real)
+            loss = F.binary_cross_entropy_with_logits(dis_output,
+                                                      target_tensor)
         else:
             raise ValueError('Unexpected gan_mode {}'.format(self.gan_mode))
         return loss
@@ -130,3 +164,10 @@ class GANLoss(nn.Module):
             if self.fake_label_tensor is None:
                 self.fake_label_tensor = dis_output.new_tensor(self.fake_label)
             return self.fake_label_tensor.expand_as(dis_output)
+
+    def topk_anneal(self):
+        r"""Anneal k after each epoch."""
+        if self.decay_k < 1:
+            # noinspection PyAttributeOutsideInit
+            self.k.fill_(max(self.decay_k * self.k, self.min_k))
+            print("Top-k training: update k to {}.".format(self.k))

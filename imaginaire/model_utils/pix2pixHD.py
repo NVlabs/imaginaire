@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -154,6 +154,53 @@ def get_edges(t):
     return edge.float()
 
 
+def get_train_params(net, param_names_start_with=[], param_names_include=[]):
+    r"""Get train parameters.
+
+    Args:
+        net (obj): Network object.
+        param_names_start_with (list of strings): Params whose names
+            start with any of the strings will be trained.
+        param_names_include (list of strings): Params whose names include
+            any of the strings will be trained.
+    """
+    params_to_train = []
+    params_dict = net.state_dict()
+    list_of_param_names_to_train = set()
+    # Iterate through all params in the network and check if we need to
+    # train it.
+    for key, value in params_dict.items():
+        do_train = False
+        # If the param name starts with the target string (excluding
+        # the 'module' part etc), we will train this param.
+        key_s = key.replace('module.', '').replace('averaged_model.', '')
+        for param_name in param_names_start_with:
+            if key_s.startswith(param_name):
+                do_train = True
+                list_of_param_names_to_train.add(param_name)
+
+        # Otherwise, if the param name includes the target string,
+        # we will also train it.
+        if not do_train:
+            for param_name in param_names_include:
+                if param_name in key_s:
+                    do_train = True
+                    full_param_name = \
+                        key_s[:(key_s.find(param_name) + len(param_name))]
+                    list_of_param_names_to_train.add(full_param_name)
+
+        # If we decide to train the param, add it to the list to train.
+        if do_train:
+            module = net
+            key_list = key.split('.')
+            for k in key_list:
+                module = getattr(module, k)
+            params_to_train += [module]
+
+    print('Training layers: ', sorted(list_of_param_names_to_train))
+    return params_to_train
+
+
 def get_optimizer_with_params(cfg, net_G, net_D, param_names_start_with=[],
                               param_names_include=[]):
     r"""Return the optimizer object.
@@ -167,52 +214,6 @@ def get_optimizer_with_params(cfg, net_G, net_D, param_names_start_with=[],
         param_names_include (list of strings): Params whose names include
             any of the strings will be trained.
     """
-    def get_train_params(net, param_names_start_with, param_names_include):
-        r"""Get train parameters.
-
-        Args:
-            net (obj): Network object.
-            param_names_start_with (list of strings): Params whose names
-                start with any of the strings will be trained.
-            param_names_include (list of strings): Params whose names include
-                any of the strings will be trained.
-        """
-        params_to_train = []
-        params_dict = net.state_dict()
-        list_of_param_names_to_train = set()
-        # Iterate through all params in the network and check if we need to
-        # train it.
-        for key, value in params_dict.items():
-            do_train = False
-            # If the param name starts with the target string (excluding
-            # the 'module' part etc), we will train this param.
-            key_s = key.replace('module.', '').replace('averaged_model.', '')
-            for param_name in param_names_start_with:
-                if key_s.startswith(param_name):
-                    do_train = True
-                    list_of_param_names_to_train.add(param_name)
-
-            # Otherwise, if the param name includes the target string,
-            # we will also train it.
-            if not do_train:
-                for param_name in param_names_include:
-                    if param_name in key_s:
-                        do_train = True
-                        full_param_name = \
-                            key_s[:(key_s.find(param_name) + len(param_name))]
-                        list_of_param_names_to_train.add(full_param_name)
-
-            # If we decide to train the param, add it to the list to train.
-            if do_train:
-                module = net
-                key_list = key.split('.')
-                for k in key_list:
-                    module = getattr(module, k)
-                params_to_train += [module]
-
-        print('Training layers: ', sorted(list_of_param_names_to_train))
-        return params_to_train
-
     # If any of the param name lists is not empty, will only train
     # these params. Otherwise will train the entire network (all params).
     if param_names_start_with or param_names_include:

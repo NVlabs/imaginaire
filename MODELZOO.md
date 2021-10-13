@@ -7,7 +7,7 @@
 
 ## Introduction
 
-We provide a wide range of pretrained imaginaire models for different tasks. All the models were trained using an NVIDIA DGX 1 machine with 8 32GB V100 using NVIDIA PyTorch docker 20.03.
+We provide a wide range of pretrained imaginaire models for different tasks. All the models were trained using an NVIDIA DGX 1 machine with 8 32GB V100 using NVIDIA PyTorch docker 20.06 or later.
 
 
 |Algorithm Name                               | Task                                                                                                            | Model        |  Resolution |
@@ -35,4 +35,13 @@ We provide a wide range of pretrained imaginaire models for different tasks. All
 |:--------------------------------------------|:----------------------------------------------------------------------------------------------------------------|--------------|------------:|
 |[vid2vid](projects/vid2vid/README.md)         | Cityscapes, segmentation to video                                                                               |[download](https://drive.google.com/file/d/1b2M5rU740vBurLQ9iDP2kb4sP5HAb-Jx/view?usp=sharing)  | 1024x512    |
 |[fs-vid2vid](projects/fs_vid2vid/README.md)   | FaceForensics, landmarks to video                                                                               |[download](https://drive.google.com/file/d/1F_22ctFmo553nRHy1d_BX7aorc9zk9cF/view?usp=sharing)  | 512x512     |
+
+
+
+### World-to-world Translation
+
+
+|Algorithm Name                               | Task                                                                                                            | Model        |  Resolution |
+|:--------------------------------------------|:----------------------------------------------------------------------------------------------------------------|--------------|------------:|
 |[wc-vid2vid](projects/wc_vid2vid/README.md)   | Cityscapes, segmentation to video                                                                               |[download](https://drive.google.com/file/d/1CvRBok210WWQHF6VuZvU4Vuzdd05ItYB/view?usp=sharing)  | 1024x512    |
+|[GANcraft](projects/gancraft/README.md)   | Semantic block worlds to realistic worlds                                                                               |[download](https://drive.google.com/file/d/1T1GeItHXwa0dpDPMLP6EaYQ-hsawuNXS/view?usp=sharing)  | arbitrary    |

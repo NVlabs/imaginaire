@@ -17,11 +17,13 @@ num_epochs_temporal_step: 20
 trainer:
     distributed_data_parallel: apex
     type: imaginaire.trainers.wc_vid2vid
-    amp: O1
-    model_average: False
-    model_average_beta: 0.999
-    model_average_start_iteration: 500
-    model_average_batch_norm_estimation_iteration: 0
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: False
+        beta: 0.9999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
     num_videos_to_test: 64
     num_frames_per_video: 10
 
@@ -144,23 +146,25 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - seg_maps:
             ext: png
-            num_channels: 35
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
         - unprojections:
             ext: pkl
             post_aug_ops: convert::imaginaire.model_utils.wc_vid2vid.render::decode_unprojections
 
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 35
+    input_labels:
+        - seg_maps
+
     # Which lmdb contains the ground truth image.
     input_image:
         - images
-
-    # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - seg_maps
 
     # Train dataset details.
     train:
@@ -203,23 +207,26 @@ test_data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - seg_maps:
             ext: png
-            num_channels: 35
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
+            normalize: False
         - unprojections:
             ext: pkl
             post_aug_ops: convert::imaginaire.model_utils.wc_vid2vid.render::decode_unprojections
 
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 35
+    input_labels:
+        - seg_maps
+
     # Which lmdb contains the ground truth image.
     input_image:
         - images
-
-    # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - seg_maps
 
     # Test dataset details.
     paired: True
@@ -227,7 +234,7 @@ test_data:
         is_lmdb: False
         # Input LMDBs.
         roots:
-            - projects/wc_vid2vid_cityscapes/test_data/cityscapes
+            - projects/wc_vid2vid/cityscapes/test_data/cityscapes
         # Batch size per GPU.
         batch_size: 1
         # If resize_h_w is not given, then it is assumed to be same as crop_h_w.

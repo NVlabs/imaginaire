@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -15,6 +15,7 @@ class Dataset(VideoDataset):
     """
 
     def __init__(self, cfg, is_inference=False, is_test=False):
+        self.paired = True
         super(Dataset, self).__init__(cfg, is_inference,
                                       sequence_length=1,
                                       is_test=is_test)

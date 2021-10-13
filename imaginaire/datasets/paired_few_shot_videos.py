@@ -1,10 +1,9 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 import copy
 import random
-
 import torch
 
 from imaginaire.datasets.paired_videos import Dataset as VideoDataset
@@ -24,6 +23,7 @@ class Dataset(VideoDataset):
 
     def __init__(self, cfg, is_inference=False, sequence_length=None,
                  few_shot_K=None, is_test=False):
+        self.paired = True
         # Get initial few shot K.
         if few_shot_K is None:
             self.few_shot_K = cfg.data.initial_few_shot_K
@@ -202,12 +202,11 @@ class Dataset(VideoDataset):
         key['obj_indices'] = chosen_obj_indices
         return key, few_shot_key
 
-    def _prepare_data(self, keys, concat):
+    def _prepare_data(self, keys):
         r"""Load data and perform augmentation.
 
         Args:
             keys (dict): Key into LMDB/folder dataset for this item.
-            concat (bool): Concatenate all items in labels?
         Returns:
             data (dict): Dict with all chosen data_types.
         """
@@ -234,7 +233,13 @@ class Dataset(VideoDataset):
         data = select_object(data, obj_indices)
 
         # Do augmentations for images.
-        data, is_flipped = self.perform_augmentation(data, paired=True)
+        data, is_flipped = self.perform_augmentation(data, paired=True, augment_ops=self.augmentor.augment_ops)
+
+        # Create copy of keypoint data types before post aug.
+        # kp_data = {}
+        # for data_type in self.keypoint_data_types:
+        #     new_key = data_type + '_xy'
+        #     kp_data[new_key] = copy.deepcopy(data[data_type])
 
         # Create copy of keypoint data types before post aug.
         kp_data = {}
@@ -250,45 +255,33 @@ class Dataset(VideoDataset):
         # Convert images to tensor.
         data = self.to_tensor(data)
 
-        # Do one-hot encoding of required image labels.
-        data = self.make_one_hot(data)
-
         # Pack the sequence of images.
         for data_type in self.image_data_types:
             for idx in range(len(data[data_type])):
                 data[data_type][idx] = data[data_type][idx].unsqueeze(0)
             data[data_type] = torch.cat(data[data_type], dim=0)
 
-        # Package output.
-        if concat and self.input_labels:
-            labels = []
-            for data_type in self.input_labels:
-                label = data.pop(data_type)
-                labels.append(label)
-            data['label'] = torch.cat(labels, dim=1)
+        # Add keypoint xy to data.
+        data.update(kp_data)
 
         data['is_flipped'] = is_flipped
         data['key'] = keys
 
-        # Add keypoint xy to data.
-        data.update(kp_data)
-
         return data
 
-    def _getitem(self, index, concat=True):
+    def _getitem(self, index):
         r"""Gets selected files.
 
         Args:
             index (int): Index into dataset.
-            concat (bool): Concatenate all items in labels?
         Returns:
             data (dict): Dict with all chosen data_types.
         """
         # Select a sample from the available data.
         keys, few_shot_keys = self._sample_keys(index)
 
-        data = self._prepare_data(keys, concat)
-        few_shot_data = self._prepare_data(few_shot_keys, concat)
+        data = self._prepare_data(keys)
+        few_shot_data = self._prepare_data(few_shot_keys)
 
         # Add few shot data into data.
         for key, value in few_shot_data.items():

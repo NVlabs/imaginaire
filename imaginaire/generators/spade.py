@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -31,9 +31,13 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         print('SPADE generator initialization.')
         # We assume the first datum is the ground truth image.
-        image_channels = get_paired_input_image_channel_number(data_cfg)
-        # Calculate number of channels in the input label.
-        num_labels = get_paired_input_label_channel_number(data_cfg)
+        image_channels = getattr(gen_cfg, 'image_channels', None)
+        if image_channels is None:
+            image_channels = get_paired_input_image_channel_number(data_cfg)
+        num_labels = getattr(gen_cfg, 'num_labels', None)
+        if num_labels is None:
+            # Calculate number of channels in the input label when not specified.
+            num_labels = get_paired_input_label_channel_number(data_cfg)
         crop_h, crop_w = get_crop_h_w(data_cfg.train.augmentations)
         # Build the generator
         out_image_small_side_size = crop_w if crop_w < crop_h else crop_h
@@ -68,8 +72,7 @@ class Generator(nn.Module):
         print('\tWeight norm type: %s' % weight_norm_type)
         skip_activation_norm = \
             getattr(gen_cfg, 'skip_activation_norm', True)
-        activation_norm_params = \
-            getattr(gen_cfg, 'activation_norm_params', None)
+        activation_norm_params = getattr(gen_cfg, 'activation_norm_params', None)
         if activation_norm_params is None:
             activation_norm_params = types.SimpleNamespace()
         if not hasattr(activation_norm_params, 'num_filters'):
@@ -77,24 +80,18 @@ class Generator(nn.Module):
         if not hasattr(activation_norm_params, 'kernel_size'):
             setattr(activation_norm_params, 'kernel_size', 3)
         if not hasattr(activation_norm_params, 'activation_norm_type'):
-            setattr(activation_norm_params,
-                    'activation_norm_type', 'sync_batch')
+            setattr(activation_norm_params, 'activation_norm_type', 'sync_batch')
         if not hasattr(activation_norm_params, 'separate_projection'):
             setattr(activation_norm_params, 'separate_projection', False)
         if not hasattr(activation_norm_params, 'activation_norm_params'):
-            activation_norm_params.activation_norm_params = \
-                types.SimpleNamespace()
+            activation_norm_params.activation_norm_params = types.SimpleNamespace()
             activation_norm_params.activation_norm_params.affine = True
         setattr(activation_norm_params, 'cond_dims', num_labels)
         if not hasattr(activation_norm_params, 'weight_norm_type'):
-            setattr(activation_norm_params,
-                    'weight_norm_type', weight_norm_type)
-        global_adaptive_norm_type = getattr(gen_cfg,
-                                            'global_adaptive_norm_type',
-                                            'sync_batch')
-        use_posenc_in_input_layer = getattr(gen_cfg,
-                                            'use_posenc_in_input_layer',
-                                            True)
+            setattr(activation_norm_params, 'weight_norm_type', weight_norm_type)
+        global_adaptive_norm_type = getattr(gen_cfg, 'global_adaptive_norm_type', 'sync_batch')
+        use_posenc_in_input_layer = getattr(gen_cfg, 'use_posenc_in_input_layer', True)
+        output_multiplier = getattr(gen_cfg, 'output_multiplier', 1.0)
         print(activation_norm_params)
         self.spade_generator = SPADEGenerator(num_labels,
                                               out_image_small_side_size,
@@ -107,7 +104,8 @@ class Generator(nn.Module):
                                               global_adaptive_norm_type,
                                               skip_activation_norm,
                                               use_posenc_in_input_layer,
-                                              self.use_style_encoder)
+                                              self.use_style_encoder,
+                                              output_multiplier)
         if self.use_style:
             # Build the encoder.
             style_enc_cfg = getattr(gen_cfg, 'style_enc', None)
@@ -188,27 +186,42 @@ class Generator(nn.Module):
         """
         self.eval()
         self.spade_generator.eval()
-        if random_style:
-            if self.z is None or not use_fixed_random_style:
-                bs = data['label'].size(0)
-                z = torch.randn(
-                    bs, self.style_dims, dtype=torch.float32).to('cuda')
-                if data['label'].dtype == data['label'].dtype == torch.float16:
-                    z = z.half()
-                self.z = z
+
+        if self.use_style_encoder:
+            if random_style and self.use_style_encoder:
+                if self.z is None or not use_fixed_random_style:
+                    bs = data['label'].size(0)
+                    z = torch.randn(
+                        bs, self.style_dims, dtype=torch.float32).to('cuda')
+                    if (data['label'].dtype ==
+                            data['label'].dtype ==
+                            torch.float16):
+                        z = z.half()
+                    self.z = z
+                else:
+                    z = self.z
             else:
-                z = self.z
-        else:
-            mu, logvar, z = self.style_encoder(data['images'])
-        data['z'] = z
+                mu, logvar, z = self.style_encoder(data['images'])
+            data['z'] = z
+
         output = self.spade_generator(data)
         output_images = output['fake_images']
+
         if keep_original_size:
             height = data['original_h_w'][0][0]
             width = data['original_h_w'][0][1]
             output_images = torch.nn.functional.interpolate(
                 output_images, size=[height, width])
-        file_names = data['key']['seg_maps'][0]
+
+        for key in data['key'].keys():
+            if 'segmaps' in key or 'seg_maps' in key:
+                file_names = data['key'][key][0]
+                break
+        for key in data['key'].keys():
+            if 'edgemaps' in key or 'edge_maps' in key:
+                file_names = data['key'][key][0]
+                break
+
         return output_images, file_names
 
 
@@ -230,6 +243,7 @@ class SPADEGenerator(nn.Module):
             shortcut connection in residual blocks.
         use_style_encoder (bool): Whether to use global adaptive norm
             like conditional batch norm or adaptive instance norm.
+        output_multiplier (float): A positive number multiplied to the output
     """
 
     def __init__(self,
@@ -244,8 +258,10 @@ class SPADEGenerator(nn.Module):
                  global_adaptive_norm_type,
                  skip_activation_norm,
                  use_posenc_in_input_layer,
-                 use_style_encoder):
+                 use_style_encoder,
+                 output_multiplier):
         super(SPADEGenerator, self).__init__()
+        self.output_multiplier = output_multiplier
         self.use_style_encoder = use_style_encoder
         self.use_posenc_in_input_layer = use_posenc_in_input_layer
         self.out_image_small_side_size = out_image_small_side_size
@@ -278,17 +294,12 @@ class SPADEGenerator(nn.Module):
             if not hasattr(adaptive_norm_params, 'cond_dims'):
                 setattr(adaptive_norm_params, 'cond_dims', 2 * style_dims)
             if not hasattr(adaptive_norm_params, 'activation_norm_type'):
-                setattr(adaptive_norm_params, 'activation_norm_type',
-                        global_adaptive_norm_type)
+                setattr(adaptive_norm_params, 'activation_norm_type', global_adaptive_norm_type)
             if not hasattr(adaptive_norm_params, 'weight_norm_type'):
-                setattr(adaptive_norm_params,
-                        'weight_norm_type',
-                        activation_norm_params.weight_norm_type)
+                setattr(adaptive_norm_params, 'weight_norm_type', activation_norm_params.weight_norm_type)
             if not hasattr(adaptive_norm_params, 'separate_projection'):
-                setattr(adaptive_norm_params, 'separate_projection',
-                        activation_norm_params.separate_projection)
-            adaptive_norm_params.activation_norm_params = \
-                types.SimpleNamespace()
+                setattr(adaptive_norm_params, 'separate_projection', activation_norm_params.separate_projection)
+            adaptive_norm_params.activation_norm_params = types.SimpleNamespace()
             setattr(adaptive_norm_params.activation_norm_params, 'affine',
                     activation_norm_params.activation_norm_params.affine)
             base_cbn2d_block = \
@@ -374,6 +385,12 @@ class SPADEGenerator(nn.Module):
         if self.out_image_small_side_size == 1024:
             self.up_3a = base_res2d_block(2 * num_filters, 1 * num_filters)
             self.up_3b = base_res2d_block(1 * num_filters, 1 * num_filters)
+            self.conv_img512 = Conv2dBlock(1 * num_filters, image_channels,
+                                           5, stride=1, padding=2,
+                                           weight_norm_type=weight_norm_type,
+                                           activation_norm_type='none',
+                                           nonlinearity=nonlinearity,
+                                           order='ANC')
             self.up_4a = base_res2d_block(num_filters, num_filters // 2)
             self.up_4b = base_res2d_block(num_filters // 2, num_filters // 2)
             self.conv_img1024 = Conv2dBlock(num_filters // 2, image_channels,
@@ -382,15 +399,15 @@ class SPADEGenerator(nn.Module):
                                             activation_norm_type='none',
                                             nonlinearity=nonlinearity,
                                             order='ANC')
+            self.nearest_upsample4x = NearestUpsample(scale_factor=4, mode='nearest')
             self.base = 64
-        if self.out_image_small_side_size != 256 and \
-                self.out_image_small_side_size != \
-                512 and self.out_image_small_side_size != 1024:
+        if self.out_image_small_side_size != 256 and self.out_image_small_side_size != 512 \
+                and self.out_image_small_side_size != 1024:
             raise ValueError('Generation image size (%d, %d) not supported' %
                              (self.out_image_small_side_size,
                               self.out_image_small_side_size))
-        self.nearest_upsample2x = NearestUpsample(scale_factor=2,
-                                                  mode='nearest')
+        self.nearest_upsample2x = NearestUpsample(scale_factor=2, mode='nearest')
+
         xv, yv = torch.meshgrid(
             [torch.arange(-1, 1.1, 2. / 15), torch.arange(-1, 1.1, 2. / 15)])
         self.xy = torch.cat((xv.unsqueeze(0), yv.unsqueeze(0)), 0).unsqueeze(0)
@@ -462,7 +479,7 @@ class SPADEGenerator(nn.Module):
         # 256x256
         if self.out_image_small_side_size == 256:
             x256 = self.conv_img256(x)
-            x = torch.tanh(x256)
+            x = torch.tanh(self.output_multiplier * x256)
         # 512x512
         elif self.out_image_small_side_size == 512:
             x256 = self.conv_img256(x)
@@ -471,11 +488,11 @@ class SPADEGenerator(nn.Module):
             x = self.up_3b(x, seg)
             x = self.nearest_upsample2x(x)
             x512 = self.conv_img512(x)
-            x = torch.tanh(x256 + x512)
+            x = torch.tanh(self.output_multiplier * (x256 + x512))
         # 1024x1024
         elif self.out_image_small_side_size == 1024:
             x256 = self.conv_img256(x)
-            x256 = self.nearest_upsample2x(x256)
+            x256 = self.nearest_upsample4x(x256)
             x = self.up_3a(x, seg)
             x = self.up_3b(x, seg)
             x = self.nearest_upsample2x(x)
@@ -485,7 +502,7 @@ class SPADEGenerator(nn.Module):
             x = self.up_4b(x, seg)
             x = self.nearest_upsample2x(x)
             x1024 = self.conv_img1024(x)
-            x = torch.tanh(x256 + x512 + x1024)
+            x = torch.tanh(self.output_multiplier * (x256 + x512 + x1024))
         output = dict()
         output['fake_images'] = x
         return output

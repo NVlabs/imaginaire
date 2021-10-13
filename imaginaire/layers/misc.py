@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -12,9 +12,10 @@ class ApplyNoise(nn.Module):
     def __init__(self):
         super().__init__()
         # scale of the noise
-        self.weight = nn.Parameter(torch.zeros(1))
+        self.scale = nn.Parameter(torch.zeros(1))
+        self.conditional = True
 
-    def forward(self, x, noise=None):
+    def forward(self, x, *_args, noise=None, **_kwargs):
         r"""
 
         Args:
@@ -26,7 +27,7 @@ class ApplyNoise(nn.Module):
             sz = x.size()
             noise = x.new_empty(sz[0], 1, *sz[2:]).normal_()
 
-        return x + self.weight * noise
+        return x + self.scale * noise
 
 
 class PartialSequential(nn.Sequential):
@@ -45,3 +46,16 @@ class PartialSequential(nn.Sequential):
         for module in self:
             act, mask = module(act, mask_in=mask)
         return act
+
+
+class ConstantInput(nn.Module):
+    def __init__(self, channel, size=4):
+        super().__init__()
+        if isinstance(size, int):
+            h, w = size, size
+        else:
+            h, w = size
+        self.input = nn.Parameter(torch.randn(1, channel, h, w))
+
+    def forward(self):
+        return self.input

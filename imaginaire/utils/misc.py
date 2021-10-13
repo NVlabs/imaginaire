@@ -1,15 +1,14 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 """Miscellaneous utils."""
+import collections
 from collections import OrderedDict
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.stats import truncnorm
-from torch._six import container_abcs, string_classes
+string_classes = (str, bytes)
 
 
 def split_labels(labels, label_lengths):
@@ -62,9 +61,9 @@ def to_device(data, device):
     if isinstance(data, torch.Tensor):
         data = data.to(torch.device(device))
         return data
-    elif isinstance(data, container_abcs.Mapping):
+    elif isinstance(data, collections.abc.Mapping):
         return {key: to_device(data[key], device) for key in data}
-    elif isinstance(data, container_abcs.Sequence) and \
+    elif isinstance(data, collections.abc.Sequence) and \
             not isinstance(data, string_classes):
         return [to_device(d, device) for d in data]
     else:
@@ -98,9 +97,9 @@ def to_half(data):
     if isinstance(data, torch.Tensor) and torch.is_floating_point(data):
         data = data.half()
         return data
-    elif isinstance(data, container_abcs.Mapping):
+    elif isinstance(data, collections.abc.Mapping):
         return {key: to_half(data[key]) for key in data}
-    elif isinstance(data, container_abcs.Sequence) and \
+    elif isinstance(data, collections.abc.Sequence) and \
             not isinstance(data, string_classes):
         return [to_half(d) for d in data]
     else:
@@ -116,11 +115,47 @@ def to_float(data):
     if isinstance(data, torch.Tensor) and torch.is_floating_point(data):
         data = data.float()
         return data
-    elif isinstance(data, container_abcs.Mapping):
+    elif isinstance(data, collections.abc.Mapping):
         return {key: to_float(data[key]) for key in data}
-    elif isinstance(data, container_abcs.Sequence) and \
+    elif isinstance(data, collections.abc.Sequence) and \
             not isinstance(data, string_classes):
         return [to_float(d) for d in data]
+    else:
+        return data
+
+
+def to_channels_last(data):
+    r"""Move all data to ``channels_last`` format.
+
+    Args:
+        data (dict, list or tensor): Input data.
+    """
+    if isinstance(data, torch.Tensor):
+        if data.dim() == 4:
+            data = data.to(memory_format=torch.channels_last)
+        return data
+    elif isinstance(data, collections.abc.Mapping):
+        return {key: to_channels_last(data[key]) for key in data}
+    elif isinstance(data, collections.abc.Sequence) and \
+            not isinstance(data, string_classes):
+        return [to_channels_last(d) for d in data]
+    else:
+        return data
+
+
+def slice_tensor(data, start, end):
+    r"""Slice all tensors from start to end.
+    Args:
+        data (dict, list or tensor): Input data.
+    """
+    if isinstance(data, torch.Tensor):
+        data = data[start:end]
+        return data
+    elif isinstance(data, collections.abc.Mapping):
+        return {key: slice_tensor(data[key], start, end) for key in data}
+    elif isinstance(data, collections.abc.Sequence) and \
+            not isinstance(data, string_classes):
+        return [slice_tensor(d, start, end) for d in data]
     else:
         return data
 
@@ -201,19 +236,19 @@ def random_shift(x, offset=0.05, mode='bilinear', padding_mode='reflection'):
     return x
 
 
-def truncated_gaussian(threshold, size, seed=None, device=None):
-    r"""Apply the truncated gaussian trick to trade diversity for quality
-
-    Args:
-        threshold (float): Truncation threshold.
-        size (list of integer): Tensor size.
-        seed (int): Random seed.
-        device:
-    """
-    state = None if seed is None else np.random.RandomState(seed)
-    values = truncnorm.rvs(-threshold, threshold,
-                           size=size, random_state=state)
-    return torch.tensor(values, device=device).float()
+# def truncated_gaussian(threshold, size, seed=None, device=None):
+#     r"""Apply the truncated gaussian trick to trade diversity for quality
+#
+#     Args:
+#         threshold (float): Truncation threshold.
+#         size (list of integer): Tensor size.
+#         seed (int): Random seed.
+#         device:
+#     """
+#     state = None if seed is None else np.random.RandomState(seed)
+#     values = truncnorm.rvs(-threshold, threshold,
+#                            size=size, random_state=state)
+#     return torch.tensor(values, device=device).float()
 
 
 def apply_imagenet_normalization(input):

@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -146,6 +146,7 @@ def create_metadata(data_root=None, cfg=None, paired=None, input_list=''):
 
     # Get list of all data_types in the dataset.
     available_data_types = path.get_immediate_subdirectories(data_root)
+    print(available_data_types)
     required_data_types = cfg.data.data_types
     data_exts = cfg.data.extensions
 

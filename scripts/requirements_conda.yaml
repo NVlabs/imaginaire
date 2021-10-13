@@ -1,0 +1,46 @@
+name: imaginaire
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.8
+  - pytorch=1.9
+  - torchvision
+  - cudatoolkit-dev
+  - pip
+  - numpy
+  - scipy
+  - ipython
+  - ipdb
+  - tqdm
+  - matplotlib
+  - jupyterlab
+  - cmake
+  - cython
+  - scikit-image
+  - scikit-video
+  - scikit-learn
+  - pynvml
+  - ninja
+  - python-lmdb
+  - diskcache
+  - opencv
+  - imutils
+  - imageio-ffmpeg
+  - qimage2ndarray
+  - albumentations
+  - pyglet
+  - timm
+  - boto3
+  - rsa
+  - wandb
+  - tensorboard
+  - dlib
+  - pip:
+    - av
+    - nvidia-ml-py3
+    - awscli
+    - awscli_plugin_endpoint
+    - lpips
+    - face-alignment
+    - clean-fid

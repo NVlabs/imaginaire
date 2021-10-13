@@ -1,6 +1,9 @@
 #!/bin/sh
 CURRENT=$(pwd)
 
+# Check CUDA_VERSION
+export CUDA_VERSION=$(nvcc --version| grep -Po "(\d+\.)+\d+" | head -1)
+
 sudo apt-get update && sudo apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
         build-essential \
         git \
@@ -15,47 +18,14 @@ sudo apt-get update && sudo apt-get install -y --allow-downgrades --allow-change
         ffmpeg \
         libx264-dev \
         imagemagick
-pip install cmake --upgrade
-conda install -y pytorch torchvision cudatoolkit=10.2 -c pytorch
-conda install -y -c anaconda pyqt
-pip install Pillow==6.1
-pip install tensorboard
-pip install scipy==1.3.3 --upgrade
-pip install jupyterlab --upgrade
-pip install scikit-image tqdm wget
-pip install cython pyyaml lmdb
-pip install opencv-python opencv-contrib-python
-pip install open3d albumentations requests
-pip install qimage2ndarray
-pip install imageio-ffmpeg
-pip install face-alignment dlib
-pip install pynvml
-pip install nvidia-ml-py3==7.352.0
-pip install dlib
-pip install imutils
-pip install pyglet trimesh
 
-cd imaginaire/third_party/correlation;
-rm -rf build dist *info;
-python setup.py install;
-cd ${CURRENT};
+# pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html
 
-cd imaginaire/third_party/channelnorm;
-rm -rf build dist *info;
-python setup.py install;
-cd ${CURRENT};
+for p in correlation channelnorm resample2d bias_act upfirdn2d; do
+  cd imaginaire/third_party/${p};
+  rm -rf build dist *info;
+  python setup.py install;
+  cd ${CURRENT};
+done
 
-cd imaginaire/third_party/resample2d;
-rm -rf build dist *info;
-python setup.py install
-cd ${CURRENT};
-
-cd /tmp;
-rm -rf apex
-git clone https://github.com/NVIDIA/apex;
-cd apex;
-pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
-cd ${CURRENT};
-
-
-pip install av
+pip install --upgrade -r scripts/requirements.txt

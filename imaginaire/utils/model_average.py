@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -6,7 +6,7 @@ import copy
 
 import torch
 from torch import nn
-from torch.nn.utils.spectral_norm import remove_spectral_norm
+from imaginaire.layers.weight_norm import remove_weight_norms
 from imaginaire.utils.misc import requires_grad
 
 
@@ -45,7 +45,9 @@ class ModelAverage(nn.Module):
         remove_sn (bool): Whether we remove the spectral norm when we it.
     """
     def __init__(
-            self, module, beta=0.9999, start_iteration=1000, remove_sn=True):
+            self, module, beta=0.9999, start_iteration=1000,
+            remove_wn_wrapper=True
+    ):
         super(ModelAverage, self).__init__()
         self.module = module
         # A shallow copy creates a new object which stores the reference of
@@ -54,7 +56,7 @@ class ModelAverage(nn.Module):
         # nested objects present in the original elements.
         self.averaged_model = copy.deepcopy(self.module).to('cuda')
         self.beta = beta
-        self.remove_sn = remove_sn
+        self.remove_wn_wrapper = remove_wn_wrapper
         self.start_iteration = start_iteration
         # This buffer is to track how many iterations has the model been
         # trained for. We will ignore the first $(start_iterations) and start
@@ -62,28 +64,34 @@ class ModelAverage(nn.Module):
         self.register_buffer('num_updates_tracked',
                              torch.tensor(0, dtype=torch.long))
         self.num_updates_tracked = self.num_updates_tracked.to('cuda')
-        # Averaged model does not require grad.
-        requires_grad(self.averaged_model, False)
-        # self.averaged_model.requires_grad = False
-        if self.remove_sn:
-            # If we want to remove the spectral norm, we first copy the
-            # weights to the moving average model.
+        # if self.remove_sn:
+        #     # If we want to remove the spectral norm, we first copy the
+        #     # weights to the moving average model.
+        #     self.copy_s2t()
+        #
+        #     def fn_remove_sn(m):
+        #         r"""Remove spectral norm."""
+        #         if hasattr(m, 'weight_orig'):
+        #             remove_spectral_norm(m)
+        #
+        #     self.averaged_model.apply(fn_remove_sn)
+        #     self.dim = 0
+        if self.remove_wn_wrapper:
             self.copy_s2t()
 
-            def fn_remove_sn(m):
-                r"""Remove spectral norm."""
-                if hasattr(m, 'weight_orig'):
-                    remove_spectral_norm(m)
-
-            self.averaged_model.apply(fn_remove_sn)
+            self.averaged_model.apply(remove_weight_norms)
             self.dim = 0
         else:
             self.averaged_model.eval()
+
+        # Averaged model does not require grad.
+        requires_grad(self.averaged_model, False)
 
     def forward(self, *inputs, **kwargs):
         r"""PyTorch module forward function overload."""
         return self.module(*inputs, **kwargs)
 
+    @torch.no_grad()
     def update_average(self):
         r"""Update the moving average."""
         self.num_updates_tracked += 1
@@ -91,57 +99,68 @@ class ModelAverage(nn.Module):
             beta = 0.
         else:
             beta = self.beta
-        if self.remove_sn:
-            source_dict = self.module.state_dict()
-            source_keys = source_dict.keys()
-            target_dict = self.averaged_model.state_dict()
-            target_keys = target_dict.keys()
-            with torch.no_grad():
-                for key in target_keys:
-                    # print(key)
-                    if key.endswith('weight') and key + '_orig' in source_keys:
-                        # print(key)
-                        data = self.sn_compute_weight(
-                            source_dict[key + '_orig'].data,
-                            source_dict[key + '_u'].data,
-                            source_dict[key + '_v'].data,
-                        )
-                        target_dict[key].data.copy_(
-                            target_dict[key].data * beta +
-                            data * (1 - beta))
+        source_dict = self.module.state_dict()
+        target_dict = self.averaged_model.state_dict()
+        for key in target_dict:
+            if 'num_batches_tracked' in key:
+                continue
+            if self.remove_wn_wrapper:
+                if key.endswith('weight'):
+                    # This is a weight parameter.
+                    if key + '_ori' in source_dict:
+                        # This parameter has scaled lr.
+                        source_param = \
+                            source_dict[key + '_ori'] * \
+                            source_dict[key + '_scale']
+                    elif key + '_orig' in source_dict:
+                        # This parameter has spectral norm
+                        # but not scaled lr.
+                        source_param = source_dict[key + '_orig']
+                    elif key in source_dict:
+                        # This parameter does not have
+                        # weight normalization wrappers.
+                        source_param = source_dict[key]
                     else:
-                        target_dict[key].data.copy_(
-                            target_dict[key].data * beta +
-                            source_dict[key].data * (1 - beta))
-        else:
-            is_training = self.training
-            self.eval()
-            with torch.no_grad():
-                param_dict_src = dict(self.module.named_parameters())
-                for p_name, p_tgt in self.averaged_model.named_parameters():
-                    p_src = param_dict_src[p_name]
-                    assert (p_src is not p_tgt)
-                    p_tgt.copy_(beta * p_tgt + (1. - beta) * p_src)
-                # buffers
-                param_dict_src = dict(self.module.named_buffers())
-                for p_name, p_tgt in self.averaged_model.named_buffers():
-                    p_src = param_dict_src[p_name]
-                    assert (p_src is not p_tgt)
-                    p_tgt.copy_(beta * p_tgt + (1. - beta) * p_src)
-            if is_training:
-                self.train()
+                        raise ValueError(
+                            f"{key} required in the averaged model but not "
+                            f"found in the regular model."
+                        )
+                    source_param = source_param.detach()
 
+                    if key + '_orig' in source_dict:
+                        # This parameter has spectral norm.
+                        source_param = self.sn_compute_weight(
+                            source_param,
+                            source_dict[key + '_u'],
+                            source_dict[key + '_v'],
+                        )
+                elif key.endswith('bias') and key + '_ori' in source_dict:
+                    # This is a bias parameter and has scaled lr.
+                    source_param = source_dict[key + '_ori'] * \
+                                   source_dict[key + '_scale']
+                else:
+                    # This is a normal parameter.
+                    source_param = source_dict[key]
+                target_dict[key].data.mul_(beta).add_(
+                    source_param.data, alpha=1 - beta
+                )
+            else:
+                target_dict[key].data.mul_(beta).add_(
+                    source_dict[key].data, alpha=1 - beta
+                )
+
+    @torch.no_grad()
     def copy_t2s(self):
         r"""Copy the original weights to the moving average weights."""
         target_dict = self.module.state_dict()
         source_dict = self.averaged_model.state_dict()
         beta = 0.
-        with torch.no_grad():
-            for key in source_dict:
-                target_dict[key].data.copy_(
-                    target_dict[key].data * beta +
-                    source_dict[key].data * (1 - beta))
+        for key in source_dict:
+            target_dict[key].data.copy_(
+                target_dict[key].data * beta +
+                source_dict[key].data * (1 - beta))
 
+    @torch.no_grad()
     def copy_s2t(self):
         r""" Copy state_dictionary from source to target.
         Here source is the regular module and the target is the moving
@@ -151,11 +170,10 @@ class ModelAverage(nn.Module):
         source_dict = self.module.state_dict()
         target_dict = self.averaged_model.state_dict()
         beta = 0.
-        with torch.no_grad():
-            for key in source_dict:
-                target_dict[key].data.copy_(
-                    target_dict[key].data * beta +
-                    source_dict[key].data * (1 - beta))
+        for key in source_dict:
+            target_dict[key].data.copy_(
+                target_dict[key].data * beta +
+                source_dict[key].data * (1 - beta))
 
     def __repr__(self):
         r"""Returns a string that holds a printable representation of an

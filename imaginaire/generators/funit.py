@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -196,7 +196,8 @@ class Decoder(nn.Module):
                                  nonlinearity=nonlinearity,
                                  activation_norm_type='adaptive',
                                  activation_norm_params=adain_params,
-                                 weight_norm_type=weight_norm_type)
+                                 weight_norm_type=weight_norm_type,
+                                 learn_shortcut=False)
 
         base_up_res_block = partial(UpRes2dBlock,
                                     kernel_size=5,
@@ -208,7 +209,8 @@ class Decoder(nn.Module):
                                     skip_activation_norm='instance',
                                     skip_nonlinearity=nonlinearity,
                                     nonlinearity=nonlinearity,
-                                    hidden_channels_equal_out_channels=True)
+                                    hidden_channels_equal_out_channels=True,
+                                    learn_shortcut=True)
 
         dims = num_enc_output_channels
 
@@ -341,7 +343,7 @@ class ContentEncoder(nn.Module):
             dims *= 2
 
         for _ in range(num_res_blocks):
-            model += [Res2dBlock(dims, dims, **conv_params)]
+            model += [Res2dBlock(dims, dims, learn_shortcut=False, **conv_params)]
         self.model = nn.Sequential(*model)
         self.output_dim = dims
 

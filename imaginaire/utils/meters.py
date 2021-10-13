@@ -1,15 +1,18 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 import math
+from datetime import timedelta
 
 import torch
+import wandb
+from wandb import AlertLevel
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.tensorboard.summary import hparams
 
-from apex import amp
-from imaginaire.utils.distributed import master_only
+from imaginaire.utils.distributed import master_only, dist_all_reduce_tensor, \
+    is_master, get_rank
+
 from imaginaire.utils.distributed import master_only_print as print
 
 LOG_WRITER = None
@@ -29,20 +32,14 @@ def sn_reshape_weight_to_matrix(weight):
 
 
 @torch.no_grad()
-def get_weight_stats(mod, cfg, loss_id):
+def get_weight_stats(mod):
     r"""Get weight state
 
     Args:
          mod: Pytorch module
-         cfg: Configuration object
-         loss_id: Needed when using AMP.
     """
-    loss_scale = 1.0
-    if cfg.trainer.amp == 'O1' or cfg.trainer.amp == 'O2':
-        # AMP rescales the gradient so we have to undo it.
-        loss_scale = amp._amp_state.loss_scalers[loss_id].loss_scale()
     if mod.weight_orig.grad is not None:
-        grad_norm = mod.weight_orig.grad.data.norm().item() / float(loss_scale)
+        grad_norm = mod.weight_orig.grad.data.norm().item()
     else:
         grad_norm = 0.
     weight_norm = mod.weight_orig.data.norm().item()
@@ -63,7 +60,6 @@ def set_summary_writer(log_dir):
     LOG_WRITER = SummaryWriter(log_dir=log_dir)
 
 
-@master_only
 def write_summary(name, summary, step, hist=False):
     """Utility function for write summary to log_writer.
     """
@@ -77,33 +73,6 @@ def write_summary(name, summary, step, hist=False):
         lw.add_scalar(name, summary, step)
 
 
-@master_only
-def add_hparams(hparam_dict=None, metric_dict=None):
-    r"""Add a set of hyperparameters to be compared in tensorboard.
-
-    Args:
-        hparam_dict (dictionary): Each key-value pair in the dictionary is the
-            name of the hyper parameter and it's corresponding value.
-            The type of the value can be one of `bool`, `string`, `float`,
-            `int`, or `None`.
-        metric_dict (dictionary): Each key-value pair in the dictionary is the
-            name of the metric and it's corresponding value. Note that the key
-            used here should be unique in the tensorboard record. Otherwise the
-            value you added by `add_scalar` will be displayed in hparam plugin.
-            In most cases, this is unwanted.
-    """
-    if type(hparam_dict) is not dict or type(metric_dict) is not dict:
-        raise TypeError('hparam_dict and metric_dict should be dictionary.')
-    global LOG_WRITER
-    lw = LOG_WRITER
-
-    exp, ssi, sei = hparams(hparam_dict, metric_dict)
-
-    lw.file_writer.add_summary(exp)
-    lw.file_writer.add_summary(ssi)
-    lw.file_writer.add_summary(sei)
-
-
 class Meter(object):
     """Meter is to keep track of statistics along steps.
     Meters write values for purpose like printing average values.
@@ -112,36 +81,55 @@ class Meter(object):
 
     Args:
         name (str): the name of meter
+        reduce (bool): If ``True``, perform a distributed reduce for the log
+            values across all GPUs.
     """
 
-    @master_only
-    def __init__(self, name):
+    def __init__(self, name, reduce=True):
         self.name = name
+        self.reduce = reduce
         self.values = []
 
-    @master_only
     def reset(self):
         r"""Reset the meter values"""
+        if not self.reduce and get_rank() != 0:
+            return
         self.values = []
 
-    @master_only
     def write(self, value):
         r"""Record the value"""
-        self.values.append(value)
+        if not self.reduce and get_rank() != 0:
+            return
+        if value is not None:
+            self.values.append(value)
 
-    @master_only
     def flush(self, step):
         r"""Write the value in the tensorboard.
 
         Args:
             step (int): Epoch or iteration number.
         """
-        if not all(math.isfinite(x) for x in self.values):
+        if not self.reduce and get_rank() != 0:
+            return
+        values = torch.tensor(self.values, device="cuda")
+        if self.reduce:
+            values = dist_all_reduce_tensor(values)
+
+        if not all(math.isfinite(x) for x in values):
             print("meter {} contained a nan or inf.".format(self.name))
+            if is_master():
+                wandb.alert(
+                    title='NaN',
+                    text=f'Meter {self.name} contained a nan or inf.',
+                    level=AlertLevel.WARN,
+                    wait_duration=timedelta(minutes=120)
+                )
         filtered_values = list(filter(lambda x: math.isfinite(x), self.values))
         if float(len(filtered_values)) != 0:
             value = float(sum(filtered_values)) / float(len(filtered_values))
-            write_summary(self.name, value, step)
+            if is_master():
+                write_summary(self.name, value, step)
+                wandb.log({self.name: value}, step=step)
         self.reset()
 
     @master_only
@@ -152,6 +140,8 @@ class Meter(object):
             img_grid:
             step (int): Epoch or iteration number.
         """
+        if not self.reduce and get_rank() != 0:
+            return
         global LOG_WRITER
         lw = LOG_WRITER
         if lw is None:

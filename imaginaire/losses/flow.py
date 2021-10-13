@@ -1,4 +1,7 @@
-# share: outside-ok
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+#
+# This work is made available under the Nvidia Source Code License-NC.
+# To view a copy of this license, check out LICENSE.md
 # flake8: noqa
 import importlib
 import warnings
@@ -53,10 +56,7 @@ class FlowLoss(nn.Module):
         self.criterion = nn.L1Loss()
         self.criterionMasked = MaskedL1Loss()
         flow_module = importlib.import_module(cfg.flow_network.type)
-        # Automatically casting the flow network to half precision when using
-        # ampO1.
-        fp16 = cfg.trainer.amp > 'O0'
-        self.flowNet = flow_module.FlowNet(pretrained=True, fp16=fp16)
+        self.flowNet = flow_module.FlowNet(pretrained=True)
         self.warp_ref = getattr(cfg.gen.flow, 'warp_ref', False)
         self.pose_cfg = pose_cfg = getattr(cfg.data, 'for_pose_dataset', None)
         self.for_pose_dataset = pose_cfg is not None

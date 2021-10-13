@@ -1,18 +1,25 @@
-pip install cmake --upgrade
-pip install Pillow
-pip install tensorboard
-pip install scipy==1.3.3 --upgrade
-pip install jupyterlab --upgrade
-pip install scikit-image tqdm wget
-pip install cython pyyaml lmdb
-pip install opencv-python opencv-contrib-python
-pip install open3d albumentations requests
-pip install qimage2ndarray
-pip install imageio-ffmpeg
-pip install face-alignment dlib
-pip install pynvml
-pip install nvidia-ml-py3==7.352.0
-pip install dlib
-pip install imutils
-pip install pyglet trimesh
-pip install av
+@ECHO OFF
+FOR /F "tokens=*" %%g IN ('nvcc --version') do (set ver=%%g)
+
+echo %ver%
+set CUDA_VERSION=%ver:~11,4%
+echo %CUDA_VERSION%
+
+pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio===0.9.0 -f https://download.pytorch.org/whl/torch_stable.html
+
+pip install --upgrade -r scripts/requirements.txt
+
+echo %cd%
+set curr_directory=%cd%
+echo %curr_directory%
+
+for %%p in (correlation channelnorm resample2d bias_act upfirdn2d) do (
+  cd %curr_directory%
+  cd imaginaire\third_party\%%p
+  rmdir /s /q build dist *info
+  python setup.py install
+  cd %curr_directory%
+)
+
+
+

@@ -1,7 +1,8 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
+
 """
 Modified from https://github.com/abdulfatir/gan-metrics-pytorch
 Copyright 2018 Institute of Bioinformatics, JKU Linz
@@ -21,15 +22,18 @@ import warnings
 import numpy as np
 import torch
 
-from imaginaire.evaluation.common import get_activations
+from imaginaire.evaluation.common import get_activations, \
+    load_or_compute_activations
 from imaginaire.utils.distributed import is_master
 from imaginaire.utils.distributed import master_only_print as print
 
 
+@torch.no_grad()
 def compute_kid(kid_path, data_loader, net_G,
                 key_real='images', key_fake='fake_images',
+                real_act=None, fake_act=None,
                 sample_size=None, preprocess=None, is_video=False,
-                save_act=True, num_subsets=1, subset_size=None):
+                save_act=True, num_subsets=1, subset_size=None, **kwargs):
     r"""Compute the kid score.
 
     Args:
@@ -40,6 +44,8 @@ def compute_kid(kid_path, data_loader, net_G,
             because video generation requires more complicated processing.
         key_real (str): Dictionary key value for the real data.
         key_fake (str): Dictionary key value for the fake data.
+        real_act (torch.Tensor or None): Feature activations of real data.
+        fake_act (torch.Tensor or None): Feature activations of fake data.
         sample_size (int): How many samples to be used for computing feature
             activations.
         preprocess (func): The preprocess function to be applied to the data.
@@ -53,35 +59,42 @@ def compute_kid(kid_path, data_loader, net_G,
         kid (float): KID value.
     """
     print('Computing KID.')
-    with torch.no_grad():
-        # Get the fake activations.
+    act_path = os.path.join(
+        os.path.dirname(kid_path), 'activations_real.npy'
+    ) if save_act else None
+
+    # Get the fake activations.
+    if fake_act is None:
         fake_act = load_or_compute_activations(None,
                                                data_loader,
                                                key_real, key_fake, net_G,
                                                sample_size, preprocess,
-                                               is_video)
+                                               is_video=is_video, **kwargs)
+    else:
+        print(f"Using precomputed activations of size {fake_act.shape}.")
 
-        # Get the ground truth activations.
-        act_path = os.path.join(
-            os.path.dirname(kid_path), 'activations.npy') if save_act else None
+    # Get the ground truth activations.
+    if real_act is None:
         real_act = load_or_compute_activations(act_path,
                                                data_loader,
                                                key_real, key_fake, None,
                                                sample_size, preprocess,
-                                               is_video)
+                                               is_video=is_video, **kwargs)
+    else:
+        print(f"Using precomputed activations of size {real_act.shape}.")
 
     if is_master():
-        mmd, mmd_vars = polynomial_mmd_averages(fake_act, real_act,
-                                                num_subsets,
-                                                subset_size,
-                                                ret_var=True)
-        kid = mmd.mean()
-        return kid
+        return _polynomial_mmd_averages(fake_act, real_act,
+                                        num_subsets,
+                                        subset_size,
+                                        ret_var=True)["KID"]
 
 
+@torch.no_grad()
 def compute_kid_data(kid_path, data_loader_a, data_loader_b,
                      key_a='images', key_b='images', sample_size=None,
-                     is_video=False, num_subsets=1, subset_size=None):
+                     is_video=False, num_subsets=1, subset_size=None,
+                     **kwargs):
     r"""Compute the kid score between two datasets.
 
     Args:
@@ -97,72 +110,32 @@ def compute_kid_data(kid_path, data_loader_a, data_loader_b,
     Returns:
         kid (float): KID value.
     """
+    min_data_size = min(len(data_loader_a.dataset),
+                        len(data_loader_b.dataset))
     if sample_size is None:
-        sample_size = min(len(data_loader_a.dataset),
-                          len(data_loader_b.dataset))
+        sample_size = min_data_size
+    else:
+        sample_size = min(sample_size, min_data_size)
     print('Computing KID using {} images from both distributions.'.
           format(sample_size))
-    with torch.no_grad():
-        path_a = os.path.join(os.path.dirname(kid_path),
-                              'activations_a.npz')
-        path_b = os.path.join(os.path.dirname(kid_path),
-                              'activations_b.npz')
-        act_a = load_or_compute_activations(path_a, data_loader_a,
-                                            key_a, key_a,
-                                            sample_size=sample_size,
-                                            is_video=is_video)
-        act_b = load_or_compute_activations(path_b, data_loader_b,
-                                            key_b, key_b,
-                                            sample_size=sample_size,
-                                            is_video=is_video)
+    path_a = os.path.join(os.path.dirname(kid_path),
+                          'activations_a.npy')
+    act_a = load_or_compute_activations(path_a, data_loader_a,
+                                        key_a, key_a,
+                                        sample_size=sample_size,
+                                        is_video=is_video, **kwargs)
+    act_b = get_activations(data_loader_b, key_b, key_b,
+                            None, sample_size, None, **kwargs)
 
-        if is_master():
-            mmd, mmd_vars = polynomial_mmd_averages(act_a, act_b,
-                                                    num_subsets,
-                                                    subset_size,
-                                                    ret_var=True)
-            kid = mmd.mean()
-            return kid
-        else:
-            return None
+    if is_master():
+        return _polynomial_mmd_averages(act_a, act_b,
+                                        num_subsets,
+                                        subset_size,
+                                        ret_var=True)["KID"]
 
 
-def load_or_compute_activations(act_path, data_loader, key_real, key_fake,
-                                generator=None, sample_size=None,
-                                preprocess=None, is_video=False):
-    r"""Load mean and covariance from saved npy file if exists. Otherwise,
-    compute the mean and covariance.
-
-    Args:
-        act_path (str or None): Location for the numpy file to store or to load
-            the statistics.
-        data_loader (obj): PyTorch dataloader object.
-        key_real (str): Dictionary key value for the real data.
-        key_fake (str): Dictionary key value for the fake data.
-        generator (obj): PyTorch trainer network.
-        sample_size (int): How many samples to be used for computing the KID.
-        preprocess (func): The preprocess function to be applied to the data.
-        is_video (bool): Whether we are handling video sequences.
-    Returns:
-        mean (tensor): Mean vector.
-        cov (tensor): Covariance matrix.
-    """
-    if is_video:
-        raise NotImplementedError("Video KID is not currently supported.")
-    if act_path is not None and os.path.exists(act_path):
-        print('Load Inception activations from {}'.format(act_path))
-        act = np.load(act_path)
-    else:
-        act = get_activations(data_loader, key_real, key_fake,
-                              generator, sample_size, preprocess)
-        if act_path is not None and is_master():
-            print('Save Inception activations to {}'.format(act_path))
-            np.save(act_path, act)
-    return act
-
-
-def polynomial_mmd_averages(codes_g, codes_r, n_subsets, subset_size,
-                            ret_var=True, **kernel_args):
+def _polynomial_mmd_averages(codes_g, codes_r, n_subsets, subset_size,
+                             ret_var=True, **kernel_args):
     r"""Computes MMD between two sets of features using polynomial kernels. It
     performs a number of repetitions of subset sampling without replacement.
 
@@ -178,8 +151,6 @@ def polynomial_mmd_averages(codes_g, codes_r, n_subsets, subset_size,
           - mmds (Tensor): Mean of MMDs.
           - mmd_vars (Tensor): Variance of MMDs.
     """
-    codes_g = torch.tensor(codes_g, device=torch.device('cuda'))
-    codes_r = torch.tensor(codes_r, device=torch.device('cuda'))
     mmds = np.zeros(n_subsets)
     if ret_var:
         mmd_vars = np.zeros(n_subsets)
@@ -198,15 +169,16 @@ def polynomial_mmd_averages(codes_g, codes_r, n_subsets, subset_size,
     for i in range(n_subsets):
         g = codes_g[choice(len(codes_g), subset_size, replace=False)]
         r = codes_r[choice(len(codes_r), subset_size, replace=False)]
-        o = polynomial_mmd(g, r, **kernel_args, ret_var=ret_var)
+        o = _polynomial_mmd(g, r, **kernel_args, ret_var=ret_var)
         if ret_var:
+            # noinspection PyUnboundLocalVariable
             mmds[i], mmd_vars[i] = o
         else:
             mmds[i] = o
-    return (mmds, mmd_vars) if ret_var else mmds
+    return {'KID': mmds.mean()}
 
 
-def polynomial_kernel(X, Y=None, degree=3, gamma=None, coef0=1.):
+def _polynomial_kernel(X, Y=None, degree=3, gamma=None, coef0=1.):
     r"""Compute the polynomial kernel between X and Y"""
     if gamma is None:
         gamma = 1.0 / X.shape[1]
@@ -217,18 +189,18 @@ def polynomial_kernel(X, Y=None, degree=3, gamma=None, coef0=1.):
     K = torch.matmul(X, Y.t())
     K *= gamma
     K += coef0
-    K = K**degree
+    K = K ** degree
     return K
 
 
-def polynomial_mmd(codes_g, codes_r, degree=3, gamma=None, coef0=1,
-                   ret_var=True):
+def _polynomial_mmd(codes_g, codes_r, degree=3, gamma=None, coef0=1,
+                    ret_var=True):
     r"""Computes MMD between two sets of features using polynomial kernels. It
     performs a number of repetitions of subset sampling without replacement.
 
     Args:
-        codes_g (Tensor): Feature activations of generated images.
-        codes_r (Tensor): Feature activations of real images.
+        codes_g (torch.Tensor): Feature activations of generated images.
+        codes_r (torch.Tensor): Feature activations of real images.
         degree (int): The degree of the polynomial kernel.
         gamma (float or None): Scale of the polynomial kernel.
         coef0 (float or None): Bias of the polynomial kernel.
@@ -236,8 +208,8 @@ def polynomial_mmd(codes_g, codes_r, degree=3, gamma=None, coef0=1,
             otherwise only returns the mean.
     Returns:
         (tuple):
-          - mmds (Tensor): Mean of MMDs.
-          - mmd_vars (Tensor): Variance of MMDs.
+          - mmds (torch.Tensor): Mean of MMDs.
+          - mmd_vars (torch.Tensor): Variance of MMDs.
     """
     # use  k(x, y) = (gamma <x, y> + coef0)^degree
     # default gamma is 1 / dim
@@ -246,9 +218,9 @@ def polynomial_mmd(codes_g, codes_r, degree=3, gamma=None, coef0=1,
 
     # with warnings.catch_warnings():
     #     warnings.simplefilter('ignore')
-    K_XX = polynomial_kernel(X, degree=degree, gamma=gamma, coef0=coef0)
-    K_YY = polynomial_kernel(Y, degree=degree, gamma=gamma, coef0=coef0)
-    K_XY = polynomial_kernel(X, Y, degree=degree, gamma=gamma, coef0=coef0)
+    K_XX = _polynomial_kernel(X, degree=degree, gamma=gamma, coef0=coef0)
+    K_YY = _polynomial_kernel(Y, degree=degree, gamma=gamma, coef0=coef0)
+    K_XY = _polynomial_kernel(X, Y, degree=degree, gamma=gamma, coef0=coef0)
 
     return _mmd2_and_variance(K_XX, K_XY, K_YY, ret_var=ret_var)
 
@@ -316,8 +288,8 @@ def _mmd2_and_variance(K_XX, K_XY, K_YY, unit_diagonal=False,
     m1 = m - 1
     m2 = m - 2
     zeta1_est = (
-        1 / (m * m1 * m2) * (
-            _sqn(Kt_XX_sums) - Kt_XX_2_sum + _sqn(Kt_YY_sums) - Kt_YY_2_sum)
+        1 / (m * m1 * m2) *
+        (_sqn(Kt_XX_sums) - Kt_XX_2_sum + _sqn(Kt_YY_sums) - Kt_YY_2_sum)
         - 1 / (m * m1) ** 2 * (Kt_XX_sum ** 2 + Kt_YY_sum ** 2)
         + 1 / (m * m * m1) * (
             _sqn(K_XY_sums_1) + _sqn(K_XY_sums_0) - 2 * K_XY_2_sum)

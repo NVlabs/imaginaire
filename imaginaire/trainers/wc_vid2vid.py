@@ -1,5 +1,7 @@
-# share: outside-ok
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+#
+# This work is made available under the Nvidia Source Code License-NC.
+# To view a copy of this license, check out LICENSE.md
 import os
 import time
 
@@ -157,7 +159,7 @@ class Trainer(Vid2VidTrainer):
             output_dir (str): Save image directory.
             save_fake_only (bool): Only save the fake output image.
         """
-        if self.is_inference and self.cfg.trainer.model_average:
+        if self.is_inference and self.cfg.trainer.model_average_config.enabled:
             test_in_model_average_mode = True
         else:
             test_in_model_average_mode = getattr(
@@ -349,12 +351,12 @@ class Trainer(Vid2VidTrainer):
             data (dict): Training data for current iteration.
         """
         self.net_G.eval()
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             self.net_G.module.averaged_model.eval()
         self.net_G_output = None
         with torch.no_grad():
             first_net_G_output, net_G_output, all_info = self.gen_frames(data)
-            if self.cfg.trainer.model_average:
+            if self.cfg.trainer.model_average_config.enabled:
                 first_net_G_output_avg, net_G_output_avg = self.gen_frames(
                     data, use_model_average=True)
 
@@ -379,7 +381,7 @@ class Trainer(Vid2VidTrainer):
                 tensor2im(data['images'][:, -1]),
                 tensor2im(net_G_output['fake_images']),
                 tensor2im(net_G_output['fake_raw_images'])]
-            if self.cfg.trainer.model_average:
+            if self.cfg.trainer.model_average_config.enabled:
                 vis_images += [
                     tensor2im(net_G_output_avg['fake_images']),
                     tensor2im(net_G_output_avg['fake_raw_images'])]
@@ -405,7 +407,7 @@ class Trainer(Vid2VidTrainer):
                     [np.zeros_like(item) for item in guidance_image],
                     [np.zeros_like(item) for item in guidance_mask]
                 ]
-                if self.cfg.trainer.model_average:
+                if self.cfg.trainer.model_average_config.enabled:
                     vis_images_first += [
                         tensor2im(first_net_G_output_avg['fake_images']),
                         tensor2im(first_net_G_output_avg['fake_raw_images'])]
@@ -425,7 +427,7 @@ class Trainer(Vid2VidTrainer):
                                   normalize=False),
                         tensor2im(net_G_output['warped_images']),
                     ]
-                    if self.cfg.trainer.model_average:
+                    if self.cfg.trainer.model_average_config.enabled:
                         vis_images_first += [
                             tensor2flow(flow_gt),
                             tensor2im(conf_gt, normalize=False),
@@ -481,7 +483,7 @@ class Trainer(Vid2VidTrainer):
         r"""Compute fid. Ignore for faster training."""
         return None
 
-    def load_checkpoint(self, cfg, checkpoint_path):
+    def load_checkpoint(self, cfg, checkpoint_path, resume=None, load_sch=True):
         r"""Save network weights, optimizer parameters, scheduler parameters
         in the checkpoint.
 
@@ -498,4 +500,4 @@ class Trainer(Vid2VidTrainer):
             load_weights=load_single_image_model_weights)
 
         # Call the original super function.
-        return super().load_checkpoint(cfg, checkpoint_path)
+        return super().load_checkpoint(cfg, checkpoint_path, resume, load_sch)

@@ -1,7 +1,8 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
+import warnings
 from types import SimpleNamespace
 
 import torch
@@ -9,6 +10,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .misc import ApplyNoise
+from imaginaire.third_party.upfirdn2d.upfirdn2d import Blur
 
 
 class _BaseConvBlock(nn.Module):
@@ -16,19 +18,71 @@ class _BaseConvBlock(nn.Module):
     with normalization and nonlinearity.
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride,
-                 padding, dilation, groups, bias, padding_mode,
-                 weight_norm_type, weight_norm_params,
-                 activation_norm_type, activation_norm_params,
-                 nonlinearity, inplace_nonlinearity,
-                 apply_noise, order, input_dim):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode,
+                 weight_norm_type, weight_norm_params, activation_norm_type, activation_norm_params, nonlinearity,
+                 inplace_nonlinearity, apply_noise, blur, order, input_dim, clamp, blur_kernel, output_scale,
+                 init_gain):
         super().__init__()
         from .nonlinearity import get_nonlinearity_layer
         from .weight_norm import get_weight_norm_layer
         from .activation_norm import get_activation_norm_layer
         self.weight_norm_type = weight_norm_type
+        self.stride = stride
+        self.clamp = clamp
+        self.init_gain = init_gain
+
+        # Nonlinearity layer.
+        if 'fused' in nonlinearity:
+            # Fusing nonlinearity with bias.
+            lr_mul = getattr(weight_norm_params, 'lr_mul', 1)
+            conv_before_nonlinearity = order.find('C') < order.find('A')
+            if conv_before_nonlinearity:
+                assert bias is True
+                bias = False
+            channel = out_channels if conv_before_nonlinearity else in_channels
+            nonlinearity_layer = get_nonlinearity_layer(
+                nonlinearity, inplace=inplace_nonlinearity,
+                num_channels=channel, lr_mul=lr_mul)
+        else:
+            nonlinearity_layer = get_nonlinearity_layer(
+                nonlinearity, inplace=inplace_nonlinearity)
+
+        # Noise injection layer.
+        if apply_noise:
+            order = order.replace('C', 'CG')
+            noise_layer = ApplyNoise()
+        else:
+            noise_layer = None
 
         # Convolutional layer.
+        if blur:
+            assert blur_kernel is not None
+            if stride == 2:
+                # Blur - Conv - Noise - Activate
+                p = (len(blur_kernel) - 2) + (kernel_size - 1)
+                pad0, pad1 = (p + 1) // 2, p // 2
+                padding = 0
+                blur_layer = Blur(
+                    blur_kernel, pad=(pad0, pad1), padding_mode=padding_mode
+                )
+                order = order.replace('C', 'BC')
+            elif stride == 0.5:
+                # Conv - Blur - Noise - Activate
+                padding = 0
+                p = (len(blur_kernel) - 2) - (kernel_size - 1)
+                pad0, pad1 = (p + 1) // 2 + 1, p // 2 + 1
+                blur_layer = Blur(
+                    blur_kernel, pad=(pad0, pad1), padding_mode=padding_mode
+                )
+                order = order.replace('C', 'CB')
+            elif stride == 1:
+                # No blur for now
+                blur_layer = nn.Identity()
+            else:
+                raise NotImplementedError
+        else:
+            blur_layer = nn.Identity()
+
         if weight_norm_params is None:
             weight_norm_params = SimpleNamespace()
         weight_norm = get_weight_norm_layer(
@@ -36,9 +90,6 @@ class _BaseConvBlock(nn.Module):
         conv_layer = weight_norm(self._get_conv_layer(
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             groups, bias, padding_mode, input_dim))
-
-        # Noise injection layer.
-        noise_layer = ApplyNoise() if apply_noise else None
 
         # Normalization layer.
         conv_before_norm = order.find('C') < order.find('N')
@@ -51,28 +102,29 @@ class _BaseConvBlock(nn.Module):
             input_dim,
             **vars(activation_norm_params))
 
-        # Nonlinearity layer.
-        nonlinearity_layer = get_nonlinearity_layer(
-            nonlinearity, inplace=inplace_nonlinearity)
-
         # Mapping from operation names to layers.
         mappings = {'C': {'conv': conv_layer},
                     'N': {'norm': activation_norm_layer},
                     'A': {'nonlinearity': nonlinearity_layer}}
+        mappings.update({'B': {'blur': blur_layer}})
+        mappings.update({'G': {'noise': noise_layer}})
 
         # All layers in order.
         self.layers = nn.ModuleDict()
         for op in order:
             if list(mappings[op].values())[0] is not None:
                 self.layers.update(mappings[op])
-                if op == 'C' and noise_layer is not None:
-                    # Inject noise after convolution.
-                    self.layers.update({'noise': noise_layer})
 
         # Whether this block expects conditional inputs.
         self.conditional = \
             getattr(conv_layer, 'conditional', False) or \
             getattr(activation_norm_layer, 'conditional', False)
+
+        # Scale the output by a learnable scaler parameter.
+        if output_scale is not None:
+            self.output_scale = nn.Parameter(torch.tensor(output_scale))
+        else:
+            self.register_parameter("output_scale", None)
 
     def forward(self, x, *cond_inputs, **kw_cond_inputs):
         r"""
@@ -82,12 +134,17 @@ class _BaseConvBlock(nn.Module):
             cond_inputs (list of tensors) : Conditional input tensors.
             kw_cond_inputs (dict) : Keyword conditional inputs.
         """
-        for layer in self.layers.values():
+        for key, layer in self.layers.items():
             if getattr(layer, 'conditional', False):
                 # Layers that require conditional inputs.
                 x = layer(x, *cond_inputs, **kw_cond_inputs)
             else:
                 x = layer(x)
+            if self.clamp is not None and isinstance(layer, nn.Conv2d):
+                x.clamp_(max=self.clamp)
+            if key == 'conv':
+                if self.output_scale is not None:
+                    x = x * self.output_scale
         return x
 
     def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
@@ -97,10 +154,19 @@ class _BaseConvBlock(nn.Module):
         if input_dim == 0:
             layer = nn.Linear(in_channels, out_channels, bias)
         else:
-            layer_type = getattr(nn, 'Conv%dd' % input_dim)
+            if stride < 1:  # Fractionally-strided convolution.
+                padding_mode = 'zeros'
+                assert padding == 0
+                layer_type = getattr(nn, f'ConvTranspose{input_dim}d')
+                stride = round(1 / stride)
+            else:
+                layer_type = getattr(nn, f'Conv{input_dim}d')
             layer = layer_type(
                 in_channels, out_channels, kernel_size, stride, padding,
-                dilation, groups, bias, padding_mode)
+                dilation=dilation, groups=groups, bias=bias,
+                padding_mode=padding_mode
+            )
+
         return layer
 
     def __repr__(self):
@@ -111,7 +177,10 @@ class _BaseConvBlock(nn.Module):
             if name == 'conv' and self.weight_norm_type != 'none' and \
                     self.weight_norm_type != '':
                 mod_str = mod_str[:-1] + \
-                    ', weight_norm={}'.format(self.weight_norm_type) + ')'
+                          ', weight_norm={}'.format(self.weight_norm_type) + ')'
+            if name == 'conv' and getattr(layer, 'base_lr_mul', 1) != 1:
+                mod_str = mod_str[:-1] + \
+                          ', lr_mul={}'.format(layer.base_lr_mul) + ')'
             mod_str = self._addindent(mod_str, 2)
             child_lines.append(mod_str)
         if len(child_lines) == 1:
@@ -133,6 +202,179 @@ class _BaseConvBlock(nn.Module):
         s = '\n'.join(s)
         s = first + '\n' + s
         return s
+
+
+class ModulatedConv2dBlock(_BaseConvBlock):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1, bias=True,
+                 padding_mode='zeros',
+                 weight_norm_type='none', weight_norm_params=None,
+                 activation_norm_type='none', activation_norm_params=None,
+                 nonlinearity='none', inplace_nonlinearity=False,
+                 apply_noise=True, blur=True, order='CNA', demodulate=True,
+                 eps=True, style_dim=None, clamp=None, blur_kernel=(1, 3, 3, 1), output_scale=None, init_gain=1.0):
+        self.eps = eps
+        self.demodulate = demodulate
+        assert style_dim is not None
+
+        super().__init__(in_channels, out_channels, kernel_size, stride,
+                         padding, dilation, groups, bias, padding_mode,
+                         weight_norm_type, weight_norm_params,
+                         activation_norm_type, activation_norm_params,
+                         nonlinearity, inplace_nonlinearity, apply_noise, blur,
+                         order, 2, clamp, blur_kernel, output_scale, init_gain)
+        self.modulation = LinearBlock(style_dim, in_channels,
+                                      weight_norm_type=weight_norm_type,
+                                      weight_norm_params=weight_norm_params)
+
+    def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
+                        padding, dilation, groups, bias, padding_mode,
+                        input_dim):
+        assert input_dim == 2
+        layer = ModulatedConv2d(
+            in_channels, out_channels, kernel_size, stride, padding,
+            dilation, groups, bias, padding_mode, self.demodulate, self.eps)
+        return layer
+
+    def forward(self, x, *cond_inputs, **kw_cond_inputs):
+        for layer in self.layers.values():
+            if getattr(layer, 'conditional', False):
+                # Layers that require conditional inputs.
+                assert len(cond_inputs) == 1
+                style = cond_inputs[0]
+                x = layer(
+                    x, self.modulation(style), **kw_cond_inputs
+                )
+            else:
+                x = layer(x)
+            if self.clamp is not None and isinstance(layer, ModulatedConv2d):
+                x.clamp_(max=self.clamp)
+        return x
+
+    def __repr__(self):
+        main_str = self._get_name() + '('
+        child_lines = []
+        for name, layer in self.layers.items():
+            mod_str = repr(layer)
+            if name == 'conv' and self.weight_norm_type != 'none' and \
+                    self.weight_norm_type != '':
+                mod_str = mod_str[:-1] + \
+                          ', weight_norm={}'.format(self.weight_norm_type) + \
+                          ', demodulate={}'.format(self.demodulate) + ')'
+            mod_str = self._addindent(mod_str, 2)
+            child_lines.append(mod_str)
+        child_lines.append(
+            self._addindent('Modulation(' + repr(self.modulation) + ')', 2)
+        )
+        if len(child_lines) == 1:
+            main_str += child_lines[0]
+        else:
+            main_str += '\n  ' + '\n  '.join(child_lines) + '\n'
+
+        main_str += ')'
+        return main_str
+
+
+class ModulatedConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding,
+                 dilation, groups, bias, padding_mode, demodulate=True,
+                 eps=1e-8):
+        # in_channels, out_channels, kernel_size, stride, padding,
+        # dilation, groups, bias, padding_mode
+        assert dilation == 1 and groups == 1
+
+        super().__init__()
+
+        self.eps = eps
+        self.kernel_size = kernel_size
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.padding = padding
+        self.stride = stride
+        self.padding_mode = padding_mode
+        # kernel_size // 2
+        # assert self.padding == padding
+
+        self.weight = nn.Parameter(
+            torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+        )
+
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(out_channels))
+        else:
+            # noinspection PyTypeChecker
+            self.register_parameter('bias', None)
+
+        # self.modulation = LinearBlock(style_dim, in_channels,
+        #                               weight_norm_type=weight_norm_type)
+        self.demodulate = demodulate
+        self.conditional = True
+
+    def forward(self, x, style, **_kwargs):
+        batch, in_channel, height, width = x.shape
+
+        # style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
+        # We assume the modulation layer is outside this module.
+        style = style.view(batch, 1, in_channel, 1, 1)
+        weight = self.weight.unsqueeze(0) * style
+
+        if self.demodulate:
+            demod = torch.rsqrt(
+                weight.pow(2).sum([2, 3, 4]) + self.eps)
+            weight = weight * demod.view(batch, self.out_channels, 1, 1, 1)
+
+        weight = weight.view(
+            batch * self.out_channels,
+            in_channel, self.kernel_size, self.kernel_size
+        )
+        if self.bias is not None:
+            bias = self.bias.repeat(batch)
+        else:
+            bias = self.bias
+
+        x = x.view(1, batch * in_channel, height, width)
+
+        if self.padding_mode != 'zeros':
+            x = F.pad(x, self._reversed_padding_repeated_twice,
+                      mode=self.padding_mode)
+            padding = (0, 0)
+        else:
+            padding = self.padding
+
+        if self.stride == 0.5:
+            weight = weight.view(
+                batch, self.out_channels, in_channel,
+                self.kernel_size, self.kernel_size
+            )
+            weight = weight.transpose(1, 2).reshape(
+                batch * in_channel, self.out_channels,
+                self.kernel_size, self.kernel_size
+            )
+            out = F.conv_transpose2d(
+                x, weight, bias, padding=padding, stride=2, groups=batch
+            )
+
+        elif self.stride == 2:
+            out = F.conv2d(
+                x, weight, bias, padding=padding, stride=2, groups=batch
+            )
+
+        else:
+            out = F.conv2d(x, weight, bias, padding=padding, groups=batch)
+
+        _, _, height, width = out.shape
+        out = out.view(batch, self.out_channels, height, width)
+
+        return out
+
+    def extra_repr(self):
+        s = ('{in_channels}, {out_channels}, kernel_size={kernel_size}'
+             ', stride={stride}')
+        if self.bias is None:
+            s += ', bias=False'
+        if self.padding_mode != 'zeros':
+            s += ', padding_mode={padding_mode}'
+        return s.format(**self.__dict__)
 
 
 class LinearBlock(_BaseConvBlock):
@@ -182,13 +424,65 @@ class LinearBlock(_BaseConvBlock):
                  weight_norm_type='none', weight_norm_params=None,
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, order='CNA', clamp=None, blur_kernel=(1, 3, 3, 1), output_scale=None,
+                 init_gain=1.0, **_kwargs):
+        if bool(_kwargs):
+            warnings.warn(f"Unused keyword arguments {_kwargs}")
         super().__init__(in_features, out_features, None, None,
                          None, None, None, bias,
                          None, weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity, apply_noise,
-                         order, 0)
+                         False, order, 0, clamp, blur_kernel, output_scale,
+                         init_gain)
+
+
+class EmbeddingBlock(_BaseConvBlock):
+    def __init__(self, in_features, out_features, bias=True,
+                 weight_norm_type='none', weight_norm_params=None,
+                 activation_norm_type='none', activation_norm_params=None,
+                 nonlinearity='none', inplace_nonlinearity=False,
+                 apply_noise=False, order='CNA', clamp=None, output_scale=None,
+                 init_gain=1.0, **_kwargs):
+        if bool(_kwargs):
+            warnings.warn(f"Unused keyword arguments {_kwargs}")
+        super().__init__(in_features, out_features, None, None,
+                         None, None, None, bias,
+                         None, weight_norm_type, weight_norm_params,
+                         activation_norm_type, activation_norm_params,
+                         nonlinearity, inplace_nonlinearity, apply_noise,
+                         False, order, 0, clamp, None, output_scale,
+                         init_gain)
+
+    def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
+                        padding, dilation, groups, bias, padding_mode,
+                        input_dim):
+        assert input_dim == 0
+        return nn.Embedding(in_channels, out_channels)
+
+
+class Embedding2dBlock(_BaseConvBlock):
+    def __init__(self, in_features, out_features, bias=True,
+                 weight_norm_type='none', weight_norm_params=None,
+                 activation_norm_type='none', activation_norm_params=None,
+                 nonlinearity='none', inplace_nonlinearity=False,
+                 apply_noise=False, order='CNA', clamp=None, output_scale=None,
+                 init_gain=1.0, **_kwargs):
+        if bool(_kwargs):
+            warnings.warn(f"Unused keyword arguments {_kwargs}")
+        super().__init__(in_features, out_features, None, None,
+                         None, None, None, bias,
+                         None, weight_norm_type, weight_norm_params,
+                         activation_norm_type, activation_norm_params,
+                         nonlinearity, inplace_nonlinearity, apply_noise,
+                         False, order, 0, clamp, None, output_scale,
+                         init_gain)
+
+    def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
+                        padding, dilation, groups, bias, padding_mode,
+                        input_dim):
+        assert input_dim == 0
+        return Embedding2d(in_channels, out_channels)
 
 
 class Conv1dBlock(_BaseConvBlock):
@@ -199,7 +493,7 @@ class Conv1dBlock(_BaseConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -250,13 +544,13 @@ class Conv1dBlock(_BaseConvBlock):
                  weight_norm_type='none', weight_norm_params=None,
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, blur=False, order='CNA', clamp=None, output_scale=None, init_gain=1.0, **_kwargs):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity, apply_noise,
-                         order, 1)
+                         blur, order, 1, clamp, None, output_scale, init_gain)
 
 
 class Conv2dBlock(_BaseConvBlock):
@@ -267,7 +561,7 @@ class Conv2dBlock(_BaseConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -318,13 +612,14 @@ class Conv2dBlock(_BaseConvBlock):
                  weight_norm_type='none', weight_norm_params=None,
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, blur=False, order='CNA', clamp=None, blur_kernel=(1, 3, 3, 1),
+                 output_scale=None, init_gain=1.0):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         apply_noise, order, 2)
+                         apply_noise, blur, order, 2, clamp, blur_kernel, output_scale, init_gain)
 
 
 class Conv3dBlock(_BaseConvBlock):
@@ -335,7 +630,7 @@ class Conv3dBlock(_BaseConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -386,14 +681,14 @@ class Conv3dBlock(_BaseConvBlock):
                  weight_norm_type='none', weight_norm_params=None,
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False,
-                 order='CNA'):
+                 apply_noise=False, blur=False, order='CNA', clamp=None, blur_kernel=(1, 3, 3, 1), output_scale=None,
+                 init_gain=1.0):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         apply_noise, order, 3)
+                         apply_noise, blur, order, 3, clamp, blur_kernel, output_scale, init_gain)
 
 
 class _BaseHyperConvBlock(_BaseConvBlock):
@@ -406,9 +701,9 @@ class _BaseHyperConvBlock(_BaseConvBlock):
                  padding_mode,
                  weight_norm_type, weight_norm_params,
                  activation_norm_type, activation_norm_params,
-                 nonlinearity, inplace_nonlinearity, apply_noise,
-                 is_hyper_conv, is_hyper_norm,
-                 order, input_dim):
+                 nonlinearity, inplace_nonlinearity, apply_noise, blur,
+                 is_hyper_conv, is_hyper_norm, order, input_dim, clamp=None, blur_kernel=(1, 3, 3, 1),
+                 output_scale=None, init_gain=1.0):
         self.is_hyper_conv = is_hyper_conv
         if is_hyper_conv:
             weight_norm_type = 'none'
@@ -418,8 +713,8 @@ class _BaseHyperConvBlock(_BaseConvBlock):
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
-                         nonlinearity, inplace_nonlinearity, apply_noise,
-                         order, input_dim)
+                         nonlinearity, inplace_nonlinearity, apply_noise, blur,
+                         order, input_dim, clamp, blur_kernel, output_scale, init_gain)
 
     def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
                         padding, dilation, groups, bias, padding_mode,
@@ -443,7 +738,7 @@ class HyperConv2dBlock(_BaseHyperConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -499,13 +794,13 @@ class HyperConv2dBlock(_BaseHyperConvBlock):
                  activation_norm_type='none', activation_norm_params=None,
                  is_hyper_conv=False, is_hyper_norm=False,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, blur=False, order='CNA', clamp=None):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
-                         nonlinearity, inplace_nonlinearity, apply_noise,
-                         is_hyper_conv, is_hyper_norm, order, 2)
+                         nonlinearity, inplace_nonlinearity, apply_noise, blur,
+                         is_hyper_conv, is_hyper_norm, order, 2, clamp)
 
 
 class HyperConv2d(nn.Module):
@@ -515,7 +810,7 @@ class HyperConv2d(nn.Module):
         in_channels (int): Dummy parameter.
         out_channels (int): Dummy parameter.
         kernel_size (int or tuple): Dummy parameter.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution. Default: 1
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -573,6 +868,7 @@ class HyperConv2d(nn.Module):
             padding = self.padding
 
         y = None
+        # noinspection PyArgumentList
         for i in range(x.size(0)):
             if self.stride >= 1:
                 yi = F.conv2d(x[i: i + 1],
@@ -601,7 +897,7 @@ class _BasePartialConvBlock(_BaseConvBlock):
                  activation_norm_type, activation_norm_params,
                  nonlinearity, inplace_nonlinearity,
                  multi_channel, return_mask,
-                 apply_noise, order, input_dim):
+                 apply_noise, order, input_dim, clamp=None, blur_kernel=(1, 3, 3, 1), output_scale=None, init_gain=1.0):
         self.multi_channel = multi_channel
         self.return_mask = return_mask
         self.partial_conv = True
@@ -610,7 +906,7 @@ class _BasePartialConvBlock(_BaseConvBlock):
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity, apply_noise,
-                         order, input_dim)
+                         False, order, input_dim, clamp, blur_kernel, output_scale, init_gain)
 
     def _get_conv_layer(self, in_channels, out_channels, kernel_size, stride,
                         padding, dilation, groups, bias, padding_mode,
@@ -665,7 +961,7 @@ class PartialConv2dBlock(_BasePartialConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -721,13 +1017,14 @@ class PartialConv2dBlock(_BasePartialConvBlock):
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
                  multi_channel=False, return_mask=True,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, order='CNA', clamp=None):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         multi_channel, return_mask, apply_noise, order, 2)
+                         multi_channel, return_mask, apply_noise, order, 2,
+                         clamp)
 
 
 class PartialConv3dBlock(_BasePartialConvBlock):
@@ -738,7 +1035,7 @@ class PartialConv3dBlock(_BasePartialConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -794,13 +1091,14 @@ class PartialConv3dBlock(_BasePartialConvBlock):
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
                  multi_channel=False, return_mask=True,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, order='CNA', clamp=None):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         multi_channel, return_mask, apply_noise, order, 3)
+                         multi_channel, return_mask, apply_noise, order, 3,
+                         clamp)
 
 
 class _MultiOutBaseConvBlock(_BaseConvBlock):
@@ -809,19 +1107,16 @@ class _MultiOutBaseConvBlock(_BaseConvBlock):
     layers in the block return more than one output.
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride,
-                 padding, dilation, groups, bias,
-                 padding_mode,
-                 weight_norm_type, weight_norm_params,
-                 activation_norm_type, activation_norm_params,
-                 nonlinearity, inplace_nonlinearity,
-                 apply_noise, order, input_dim):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode,
+                 weight_norm_type, weight_norm_params, activation_norm_type, activation_norm_params, nonlinearity,
+                 inplace_nonlinearity, apply_noise, blur, order, input_dim, clamp=None, blur_kernel=(1, 3, 3, 1),
+                 output_scale=None, init_gain=1.0):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         apply_noise, order, input_dim)
+                         apply_noise, blur, order, input_dim, clamp, blur_kernel, output_scale, init_gain)
         self.multiple_outputs = True
 
     def forward(self, x, *cond_inputs, **kw_cond_inputs):
@@ -857,7 +1152,7 @@ class MultiOutConv2dBlock(_MultiOutBaseConvBlock):
         in_channels (int): Number of channels in the input tensor.
         out_channels (int): Number of channels in the output tensor.
         kernel_size (int or tuple): Size of the convolving kernel.
-        stride (int or tuple, optional, default=1):
+        stride (int or float or tuple, optional, default=1):
             Stride of the convolution.
         padding (int or tuple, optional, default=0):
             Zero-padding added to both sides of the input.
@@ -908,13 +1203,13 @@ class MultiOutConv2dBlock(_MultiOutBaseConvBlock):
                  weight_norm_type='none', weight_norm_params=None,
                  activation_norm_type='none', activation_norm_params=None,
                  nonlinearity='none', inplace_nonlinearity=False,
-                 apply_noise=False, order='CNA'):
+                 apply_noise=False, blur=False, order='CNA', clamp=None):
         super().__init__(in_channels, out_channels, kernel_size, stride,
                          padding, dilation, groups, bias, padding_mode,
                          weight_norm_type, weight_norm_params,
                          activation_norm_type, activation_norm_params,
                          nonlinearity, inplace_nonlinearity,
-                         apply_noise, order, 2)
+                         apply_noise, blur, order, 2, clamp)
 
 
 ###############################################################################
@@ -1070,3 +1365,13 @@ class PartialConv3d(nn.Conv3d):
             return output, update_mask
         else:
             return output
+
+
+class Embedding2d(nn.Embedding):
+    def __init__(self, in_channels, out_channels):
+        super().__init__(in_channels, out_channels)
+
+    def forward(self, x):
+        return F.embedding(
+            x.squeeze(1).long(), self.weight, self.padding_idx, self.max_norm,
+            self.norm_type, self.scale_grad_by_freq, self.sparse).permute(0, 3, 1, 2).contiguous()

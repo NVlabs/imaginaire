@@ -13,11 +13,13 @@ num_epochs_temporal_step: 50
 # Trainer options.
 trainer:
     type: imaginaire.trainers.fs_vid2vid
-    amp: O1
-    model_average: True
-    model_average_beta: 0.999
-    model_average_start_iteration: 500
-    model_average_batch_norm_estimation_iteration: 0
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: True
+        beta: 0.999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
     num_videos_to_test: 128
     num_frames_per_video: 10
     gan_mode: hinge
@@ -36,6 +38,8 @@ trainer:
     init:
         type: xavier
         gain: 0.02
+    distributed_data_parallel_params:
+        find_unused_parameters: True
 
 # Optimization option.
 gen_opt:
@@ -142,7 +146,6 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - landmarks-dlib68:
             ext: json
@@ -153,8 +156,14 @@ data:
             post_aug_ops: vis::imaginaire.utils.visualization.face::connect_face_keypoints
 
     # Apply these ops on the entire data, just before returning it.
-    full_data_ops: imaginaire.model_utils.fs_vid2vid::crop_face_from_data
+    full_data_ops: imaginaire.model_utils.label::concat_labels,
+                   imaginaire.model_utils.label::concat_few_shot_labels,
+                   imaginaire.model_utils.fs_vid2vid::crop_face_from_data
     output_h_w: 256, 256
+    input_labels:
+        - landmarks-dlib68
+    input_few_shot_labels:
+        - few_shot_landmarks-dlib68
 
     # List which data types are keypoint.
     keypoint_data_types:
@@ -165,15 +174,13 @@ data:
         - images
 
     # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - landmarks-dlib68
 
 
     # Train dataset details.
     train:
         # Input LMDBs.
         roots:
-            - dataset/unit_test/lmdb/fs_vid2vid/face
+            - dataset/unit_test/raw/fs_vid2vid/face
         # Batch size per GPU.
         batch_size: 1
         initial_sequence_length: 4
@@ -182,11 +189,13 @@ data:
             resize_smallest_side: 512
             horizontal_flip: False
 
+
+
     # Validation dataset details.
     val:
         # Input LMDBs.
         roots:
-            - dataset/unit_test/lmdb/fs_vid2vid/face
+            - dataset/unit_test/raw/fs_vid2vid/face
         # Batch size per GPU.
         batch_size: 1
         # If resize_h_w is not given, then it is assumed to be same as crop_h_w.

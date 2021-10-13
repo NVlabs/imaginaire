@@ -10,11 +10,13 @@ max_epoch: 400
 logging_iter: 100
 trainer:
     type: imaginaire.trainers.spade
-    model_average: True
-    model_average_beta: 0.9999
-    model_average_start_iteration: 1000
-    model_average_batch_norm_estimation_iteration: 30
-    amp: O1
+    model_average_config:
+        enabled: True
+        beta: 0.9999
+        start_iteration: 1000
+        num_batch_norm_estimation_iterations: 30
+    amp_config:
+        enabled: True
     gan_mode: hinge
     gan_relativistic: False
     perceptual_loss:
@@ -79,9 +81,6 @@ dis:
 
 # Data options.
 data:
-    # Name of this dataset.
-    name: 'cocostuff'
-    # Which dataloader to use?
     type: imaginaire.datasets.paired_images
     # How many data loading workers per GPU?
     num_workers: 8
@@ -89,31 +88,29 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
             use_dont_care: False
         - seg_maps:
             ext: png
-            num_channels: 183
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
             normalize: False
-            use_dont_care: True
         - edge_maps:
             ext: png
             num_channels: 1
-            interpolator: BILINEAR
             normalize: False
-            use_dont_care: False
 
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: True
+    one_hot_num_classes:
+        seg_maps: 183
+    input_labels:
+        - seg_maps
+        - edge_maps
 
     # Which lmdb contains the ground truth image.
     input_image:
         - images
-
-    # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - seg_maps
-        - edge_maps
 
     # Train dataset details.
     train:
@@ -146,27 +143,23 @@ data:
             resize_h_w: 256, 256
 
 test_data:
-    # Name of this dataset.
-    name: 'cocostuff'
-    # Which dataloader to use?
     type: imaginaire.datasets.paired_images
-    # How many data loading workers per GPU?
     num_workers: 8
     input_types:
         - seg_maps:
             ext: png
-            num_channels: 183
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
             normalize: False
-            use_dont_care: True
         - edge_maps:
             ext: png
             num_channels: 1
-            interpolator: BILINEAR
             normalize: False
-            use_dont_care: False
 
-    # Which labels to be concatenated as final output label from dataloader.
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: True
+    one_hot_num_classes:
+        seg_maps: 183
     input_labels:
         - seg_maps
         - edge_maps

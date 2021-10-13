@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -109,8 +109,7 @@ def tensor2im(image_tensor, imtype=np.uint8, normalize=True,
 
 def tensor2label(segmap, n_label=None, imtype=np.uint8,
                  colorize=True, output_normalized_tensor=False):
-    r"""Convert segmentation tensor to color image.
-
+    r"""Convert segmentation mask tensor to color image.
     Args:
         segmap (tensor) of
         If tensor then (NxCxHxW) or (NxTxCxHxW) or (CxHxW).
@@ -142,7 +141,10 @@ def tensor2label(segmap, n_label=None, imtype=np.uint8,
         segmap = segmap.max(0, keepdim=True)[1]
 
     if output_normalized_tensor:
-        segmap = Colorize(n_label)(segmap).to('cuda')
+        if n_label == 0:
+            segmap = Colorize(256)(segmap).to('cuda')
+        else:
+            segmap = Colorize(n_label)(segmap).to('cuda')
         return 2 * (segmap.float() / 255) - 1
     else:
         if colorize:

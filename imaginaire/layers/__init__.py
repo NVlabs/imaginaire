@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -18,3 +18,10 @@ __all__ = ['Conv1dBlock', 'Conv2dBlock', 'Conv3dBlock', 'LinearBlock',
            'ResLinearBlock', 'HyperRes2dBlock', 'MultiOutRes2dBlock',
            'PartialRes2dBlock', 'PartialRes3dBlock',
            'NonLocal2dBlock']
+
+try:
+    from .repvgg import RepVGG1dBlock, RepVGG2dBlock, RepVGG3dBlock
+    from .attn import MultiheadAttention
+    __all__.extend(['RepVGG1dBlock', 'RepVGG2dBlock', 'RepVGG3dBlock'])
+except:  # noqa
+    pass

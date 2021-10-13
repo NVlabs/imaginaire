@@ -18,8 +18,10 @@ image_save_iter: 5000
 snapshot_save_iter: 5000
 trainer:
     type: imaginaire.trainers.munit
-    model_average: True
-    amp: O1
+    model_average_config:
+        enabled: True
+    amp_config:
+        enabled: True
     gan_mode: hinge
     perceptual_mode: vgg19
     perceptual_layers: 'relu_4_1'
@@ -87,8 +89,6 @@ data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
         - images_b:
             # If not specified, is None by default.
@@ -96,8 +96,6 @@ data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
 
     # Train dataset details.
@@ -136,12 +134,10 @@ test_data:
         - images_a:
               ext: jpg
               num_channels: 3
-              interpolator: BILINEAR
               normalize: True
         - images_b:
               ext: jpg
               num_channels: 3
-              interpolator: BILINEAR
               normalize: True
 
     # Which labels to be concatenated as final output label from dataloader.

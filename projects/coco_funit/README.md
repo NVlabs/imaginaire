@@ -6,7 +6,7 @@
 [Video (3m)](https://youtu.be/X3EB8T8zdKw) | [Video (10m)](https://youtu.be/btnDfqcedrk) |
 [Two Minute Papers Video](https://youtu.be/iKvlOviWs3E)
 
-<img alt='teaser' src='coco-funit.gif' width='640'/>
+<img alt='teaser' src='https://github.com/NVlabs/imaginaire/blob/master/projects/coco_funit/coco-funit.gif?raw=true' width='640'/>
 
 ## Software Installation
 For installation, please checkout [INSTALL.md](../../INSTALL.md).

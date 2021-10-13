@@ -4,11 +4,13 @@ max_epoch: 400
 logging_iter: 100
 trainer:
     type: imaginaire.trainers.spade
-    amp: O1
-    model_average: False
-    model_average_beta: 0.9999
-    model_average_start_iteration: 1000
-    model_average_batch_norm_estimation_iteration: 30
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: False
+        beta: 0.9999
+        start_iteration: 1000
+        num_batch_norm_estimation_iterations: 30
 
     fid_type: image
     gan_mode: hinge
@@ -47,7 +49,7 @@ dis_opt:
         step_size: 100
         gamma: 0.01
 gen:
-    type: imaginaire.generators.spade_v2
+    type: imaginaire.generators.spade
     version: v20
     style_dims: 256
     num_filters: 128
@@ -64,7 +66,7 @@ gen:
         num_filters: 64
         kernel_size: 3
 dis:
-    type: imaginaire.discriminators.spade_v2
+    type: imaginaire.discriminators.spade
     kernel_size: 3
     num_filters: 128
     max_num_filters: 512
@@ -86,42 +88,42 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - seg_maps-densepose:
             ext: png
-            num_channels: 25
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
         - depth_maps-megadepth:
             ext: png
             num_channels: 3
-            interpolator: BILINEAR
         - edge_maps-hed:
             ext: png
             num_channels: 1
-            interpolator: BILINEAR
         - pose_maps-densepose:
             ext: png
             num_channels: 3
-            interpolator: NEAREST
+            is_mask: True
             normalize: True
         - pose_maps-openpose:
             ext: png
             num_channels: 3
-            interpolator: NEAREST
+            is_mask: True
             normalize: True
 
-    # Which lmdb contains the ground truth image.
-    input_image:
-        - images
-
-    # Which labels to be concatenated as final output label from dataloader.
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps-densepose: 25
     input_labels:
         - seg_maps-densepose
         - depth_maps-megadepth
         - edge_maps-hed
         - pose_maps-densepose
         - pose_maps-openpose
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
 
     # Train dataset details.
     train:

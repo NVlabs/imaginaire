@@ -14,11 +14,13 @@ num_epochs_temporal_step: 1
 # Trainer options.
 trainer:
     type: imaginaire.trainers.vid2vid
-    amp: O1
-    model_average: True
-    model_average_beta: 0.999
-    model_average_start_iteration: 500
-    model_average_batch_norm_estimation_iteration: 0    
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: True
+        beta: 0.999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
     num_frames_per_video: 30 
 
     gan_mode: hinge
@@ -148,7 +150,6 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - poses-openpose:
             ext: json
@@ -157,11 +158,13 @@ data:
             normalize: False
             pre_aug_ops: decode_json, convert::imaginaire.utils.visualization.pose::openpose_to_npy_largest_only
             post_aug_ops: vis::imaginaire.utils.visualization.pose::draw_openpose_npy
-    
+
+    full_data_ops: imaginaire.model_utils.label::concat_labels
+    input_labels:
+        - poses-openpose
+
     input_image:
         - images
-    input_labels:
-        - poses-openpose     
     keypoint_data_types:
         - poses-openpose   
 
@@ -202,7 +205,6 @@ test_data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - poses-openpose:
             ext: json
@@ -212,10 +214,12 @@ test_data:
             pre_aug_ops: decode_json, convert::imaginaire.utils.visualization.pose::openpose_to_npy_largest_only
             post_aug_ops: vis::imaginaire.utils.visualization.pose::draw_openpose_npy
 
-    input_image:
-        - images
+    full_data_ops: imaginaire.model_utils.label::concat_labels
     input_labels:
         - poses-openpose
+
+    input_image:
+        - images
     keypoint_data_types:
         - poses-openpose
 

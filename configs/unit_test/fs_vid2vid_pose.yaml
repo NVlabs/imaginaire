@@ -10,15 +10,15 @@ num_epochs_temporal_step: 5
 # Trainer options.
 trainer:
     type: imaginaire.trainers.fs_vid2vid
-    amp: O1
-
-    model_average: True
-    model_average_beta: 0.999
-    model_average_start_iteration: 500
-    model_average_batch_norm_estimation_iteration: 0
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: True
+        beta: 0.999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
     num_videos_to_test: 128
     num_frames_per_video: 10
-
     gan_mode: hinge
     gan_relativistic: False
     perceptual_loss:
@@ -35,6 +35,8 @@ trainer:
     init:
         type: xavier
         gain: 0.02
+    distributed_data_parallel_params:
+        find_unused_parameters: True
 
 # Optimization option.
 gen_opt:
@@ -152,12 +154,11 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - pose_maps-densepose:
             ext: png
             num_channels: 3
-            interpolator: NEAREST
+            is_mask: True
             normalize: False
         - poses-openpose:
             ext: json
@@ -169,18 +170,21 @@ data:
         - human_instance_maps:
             ext: png
             num_channels: 3
-            interpolator: NEAREST
+            is_mask: True
             normalize: False
 
-    full_data_ops: imaginaire.model_utils.fs_vid2vid::crop_person_from_data    
-
-    input_image:
-        - images
-
+    full_data_ops: imaginaire.model_utils.label::concat_labels,
+                   imaginaire.model_utils.label::concat_few_shot_labels,
+                   imaginaire.model_utils.fs_vid2vid::crop_person_from_data
     input_labels:
         - pose_maps-densepose
         - poses-openpose
+    input_few_shot_labels:
+        - few_shot_pose_maps-densepose
+        - few_shot_poses-openpose
 
+    input_image:
+        - images
     keypoint_data_types:
         - poses-openpose
 
@@ -188,7 +192,7 @@ data:
     # Train dataset details.
     train:
         roots:
-            - dataset/unit_test/lmdb/fs_vid2vid/pose
+            - dataset/unit_test/raw/vid2vid/pose
         batch_size: 1
         initial_sequence_length: 4
         max_sequence_length: 16
@@ -199,7 +203,7 @@ data:
     # Validation dataset details.
     val:
         roots:
-            - dataset/unit_test/lmdb/fs_vid2vid/pose
+            - dataset/unit_test/raw/vid2vid/pose
         batch_size: 1
         augmentations:            
             resize_smallest_side: 540

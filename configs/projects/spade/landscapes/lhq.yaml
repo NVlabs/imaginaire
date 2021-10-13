@@ -1,0 +1,30 @@
+# This SPADE network has been trained on the publicly available LHQ dataset - https://github.com/universome/alis
+# using 183-dim COCO-stuff label space (184 including don't care label).
+
+pretrained_weight: 1NIh3_UZ6uqvzS4mJ4JVhfyYQuG9ZMmvA
+
+gen:
+    type: imaginaire.generators.spade
+    version: v20
+    output_multiplier: 0.5
+    image_channels: 3
+    num_labels: 184
+    style_dims: 256
+    num_filters: 128
+    kernel_size: 3
+    weight_norm_type: 'spectral'
+    use_posenc_in_input_layer: False
+    global_adaptive_norm_type: 'sync_batch'
+    activation_norm_params:
+        num_filters: 128
+        kernel_size: 5
+        separate_projection: True
+        activation_norm_type: 'sync_batch'
+    style_enc:
+        num_filters: 64
+        kernel_size: 3
+
+data:
+    train:
+        augmentations:
+            random_crop_h_w: 512, 512

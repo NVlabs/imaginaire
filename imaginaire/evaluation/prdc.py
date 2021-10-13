@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -7,33 +7,62 @@ Modified from https://github.com/clovaai/generative-evaluation-prdc
 Copyright (c) 2020-present NAVER Corp.
 MIT license
 """
-import numpy as np
+import os
 
-import sklearn.metrics
+import torch
+
 from imaginaire.utils.distributed import is_master
+from imaginaire.utils.distributed import master_only_print as print
 
-from .common import get_activations
+from .common import load_or_compute_activations, compute_pairwise_distance, \
+    compute_nn
 
-__all__ = ['compute_prdc']
 
-
-def compute_pairwise_distance(data_x, data_y=None):
-    r"""
+@torch.no_grad()
+def compute_prdc(prdc_path, data_loader, net_G,
+                 key_real='images', key_fake='fake_images',
+                 real_act=None, fake_act=None,
+                 sample_size=None, save_act=True, k=10, **kwargs):
+    r"""Compute precision diversity curve
 
     Args:
-        data_x: numpy.ndarray([N, feature_dim], dtype=np.float32)
-        data_y: numpy.ndarray([N, feature_dim], dtype=np.float32)
-    Returns:
-        numpy.ndarray([N, N], dtype=np.float32) of pairwise distances.
+
     """
-    if data_y is None:
-        data_y = data_x
-    dists = sklearn.metrics.pairwise_distances(
-        data_x, data_y, metric='euclidean', n_jobs=8)
-    return dists
+    print('Computing PRDC.')
+    act_path = os.path.join(
+        os.path.dirname(prdc_path), 'activations_real.npy'
+    ) if save_act else None
+
+    # Get the fake activations.
+    if fake_act is None:
+        fake_act = load_or_compute_activations(None,
+                                               data_loader,
+                                               key_real, key_fake, net_G,
+                                               sample_size=sample_size,
+                                               **kwargs)
+    else:
+        print(f"Using precomputed activations of size {fake_act.shape}.")
+
+    # Get the ground truth activations.
+    if real_act is None:
+        real_act = load_or_compute_activations(act_path,
+                                               data_loader,
+                                               key_real, key_fake, None,
+                                               sample_size=sample_size,
+                                               **kwargs)
+    else:
+        print(f"Using precomputed activations of size {real_act.shape}.")
+
+    if is_master():
+        prdc_data = _get_prdc(real_act, fake_act, k)
+        return \
+            prdc_data['precision'], prdc_data['recall'], \
+            prdc_data['density'], prdc_data['coverage']
+    else:
+        return None, None, None, None
 
 
-def get_kth_value(unsorted, k, axis=-1):
+def get_kth_value(unsorted, k, dim=-1):
     r"""
 
     Args:
@@ -42,27 +71,13 @@ def get_kth_value(unsorted, k, axis=-1):
     Returns:
         kth values along the designated axis.
     """
-    indices = np.argpartition(unsorted, k, axis=axis)[..., :k]
-    k_smallests = np.take_along_axis(unsorted, indices, axis=axis)
-    kth_values = k_smallests.max(axis=axis)
+    indices = torch.topk(unsorted, k, dim=dim, largest=False)[1]
+    k_smallests = torch.gather(unsorted, dim=dim, index=indices)
+    kth_values = k_smallests.max(dim=dim)[0]
     return kth_values
 
 
-def compute_nearest_neighbour_distances(input_features, nearest_k):
-    r"""
-
-    Args:
-        input_features: numpy.ndarray([N, feature_dim], dtype=np.float32)
-        nearest_k: int
-    Returns:
-        Distances to kth nearest neighbours.
-    """
-    distances = compute_pairwise_distance(input_features)
-    radii = get_kth_value(distances, k=nearest_k + 1, axis=-1)
-    return radii
-
-
-def get_prdc(real_features, fake_features, nearest_k):
+def _get_prdc(real_features, fake_features, nearest_k):
     r"""
     Computes precision, recall, density, and coverage given two manifolds.
 
@@ -73,55 +88,37 @@ def get_prdc(real_features, fake_features, nearest_k):
     Returns:
         dict of precision, recall, density, and coverage.
     """
-
-    print('Num real: {} Num fake: {}'
-          .format(real_features.shape[0], fake_features.shape[0]))
-
-    real_nearest_neighbour_distances = compute_nearest_neighbour_distances(
+    real_nearest_neighbour_distances, _ = compute_nn(
         real_features, nearest_k)
-    fake_nearest_neighbour_distances = compute_nearest_neighbour_distances(
+    real_nearest_neighbour_distances = \
+        real_nearest_neighbour_distances.max(dim=-1)[0].cpu()
+    fake_nearest_neighbour_distances, _ = compute_nn(
         fake_features, nearest_k)
+    fake_nearest_neighbour_distances = \
+        fake_nearest_neighbour_distances.max(dim=-1)[0].cpu()
     distance_real_fake = compute_pairwise_distance(
         real_features, fake_features)
 
     precision = (
-        distance_real_fake <
-        np.expand_dims(real_nearest_neighbour_distances, axis=1)
-    ).any(axis=0).mean()
+            distance_real_fake <
+            torch.unsqueeze(real_nearest_neighbour_distances, dim=1)
+    ).any(dim=0).float().mean().item()
 
     recall = (
-        distance_real_fake <
-        np.expand_dims(fake_nearest_neighbour_distances, axis=0)
-    ).any(axis=1).mean()
+            distance_real_fake <
+            torch.unsqueeze(fake_nearest_neighbour_distances, dim=0)
+    ).any(dim=1).float().mean().item()
 
     density = (1. / float(nearest_k)) * (
-        distance_real_fake <
-        np.expand_dims(real_nearest_neighbour_distances, axis=1)
-    ).sum(axis=0).mean()
+            distance_real_fake <
+            torch.unsqueeze(real_nearest_neighbour_distances, dim=1)
+    ).sum(dim=0).float().mean().item()
 
+    # noinspection PyUnresolvedReferences
     coverage = (
-        distance_real_fake.min(axis=1) <
-        real_nearest_neighbour_distances
-    ).mean()
+            distance_real_fake.min(dim=1)[0] <
+            real_nearest_neighbour_distances
+    ).float().mean().item()
 
     return dict(precision=precision, recall=recall,
                 density=density, coverage=coverage)
-
-
-def compute_prdc(cfg, data_loader, net_G,
-                 key_real='images', key_fake='fake_images', k=10):
-    r"""Compute precision diversity curve
-
-    Args:
-
-    """
-    y_real = get_activations(data_loader, key_real, key_fake,
-                             generator=None)
-    y_fake = get_activations(data_loader, key_real, key_fake,
-                             generator=net_G)
-    if is_master():
-        print("Computing density and coverage.")
-        prdc_data = get_prdc(y_real, y_fake, k)
-        return prdc_data['density'], prdc_data['coverage']
-    else:
-        return None, None

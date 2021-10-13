@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -26,6 +26,7 @@ class Dataset(BaseDataset):
                  is_inference=False,
                  sequence_length=None,
                  is_test=False):
+        self.paired = True
         # Get initial sequence length.
         if sequence_length is None and not is_inference:
             self.sequence_length = cfg.data.train.initial_sequence_length
@@ -46,7 +47,13 @@ class Dataset(BaseDataset):
         """
         label_lengths = OrderedDict()
         for data_type in self.input_labels:
-            label_lengths[data_type] = self.num_channels[data_type]
+            data_cfg = self.cfgdata
+            if hasattr(data_cfg, 'one_hot_num_classes') and data_type in data_cfg.one_hot_num_classes:
+                label_lengths[data_type] = data_cfg.one_hot_num_classes[data_type]
+                if getattr(data_cfg, 'use_dont_care', False):
+                    label_lengths[data_type] += 1
+            else:
+                label_lengths[data_type] = self.num_channels[data_type]
         return label_lengths
 
     def num_inference_sequences(self):
@@ -212,7 +219,7 @@ class Dataset(BaseDataset):
             keys.append('%s/%s' % (sequence_name, filename))
         return keys
 
-    def _getitem(self, index, concat=True):
+    def _getitem(self, index):
         r"""Gets selected files.
 
         Args:
@@ -246,47 +253,26 @@ class Dataset(BaseDataset):
         data = select_object(data, obj_indices=None)
 
         # Do augmentations for images.
-        data, is_flipped = self.perform_augmentation(data, paired=True)
-
-        # Create copy of keypoint data types before post aug.
-        kp_data = {}
-        for data_type in self.keypoint_data_types:
-            new_key = data_type + '_xy'
-            kp_data[new_key] = copy.deepcopy(data[data_type])
+        data, is_flipped = self.perform_augmentation(data, paired=True, augment_ops=self.augmentor.augment_ops)
 
         # Apply ops post augmentation.
         data = self.apply_ops(data, self.post_aug_ops)
         data = self.apply_ops(data, self.full_data_post_aug_ops, full_data=True)
+
         # Convert images to tensor.
         data = self.to_tensor(data)
 
-        # Do one-hot encoding of required image labels.
-        data = self.make_one_hot(data)
-
         # Pack the sequence of images.
-        for data_type in self.image_data_types:
+        for data_type in self.image_data_types + self.hdr_image_data_types:
             for idx in range(len(data[data_type])):
                 data[data_type][idx] = data[data_type][idx].unsqueeze(0)
             data[data_type] = torch.cat(data[data_type], dim=0)
 
-        # Package output.
-        if concat and self.input_labels:
-            labels = []
-            for data_type in self.input_labels:
-                label = data.pop(data_type)
-                labels.append(label)
-            data['label'] = torch.cat(labels, dim=1)
-            if not self.is_video_dataset:
-                data['label'] = data['label'].squeeze(0)
-
         if not self.is_video_dataset:
             # Remove any extra dimensions.
-            for data_type in self.image_data_types:
+            for data_type in self.data_types:
                 if data_type in data:
                     data[data_type] = data[data_type].squeeze(0)
-
-        # Add keypoint xy to data.
-        data.update(kp_data)
 
         data['is_flipped'] = is_flipped
         data['key'] = keys
@@ -299,4 +285,4 @@ class Dataset(BaseDataset):
         return data
 
     def __getitem__(self, index):
-        return self._getitem(index, concat=True)
+        return self._getitem(index)

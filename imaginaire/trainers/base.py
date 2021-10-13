@@ -1,21 +1,22 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
+import json
 import os
 import time
 
 import torch
 import torchvision
-from torch import nn
+import wandb
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
-from apex import amp
 from imaginaire.utils.distributed import is_master, master_only
 from imaginaire.utils.distributed import master_only_print as print
 from imaginaire.utils.io import save_pilimage_in_jpeg
-from imaginaire.utils.meters import Meter, add_hparams
-from imaginaire.utils.misc import to_cuda, to_device, requires_grad
+from imaginaire.utils.meters import Meter
+from imaginaire.utils.misc import to_cuda, to_device, requires_grad, to_channels_last
 from imaginaire.utils.model_average import (calibrate_batch_norm_momentum,
                                             reset_batch_norm)
 from imaginaire.utils.visualization import tensor2pilimage
@@ -52,7 +53,7 @@ class BaseTrainer(object):
         # Initialize models and data loaders.
         self.cfg = cfg
         self.net_G = net_G
-        if cfg.trainer.model_average:
+        if cfg.trainer.model_average_config.enabled:
             # Two wrappers (DDP + model average).
             self.net_G_module = self.net_G.module.module
         else:
@@ -66,11 +67,30 @@ class BaseTrainer(object):
         self.sch_G = sch_G
         self.sch_D = sch_D
         self.train_data_loader = train_data_loader
+        if self.cfg.trainer.channels_last:
+            self.net_G = self.net_G.to(memory_format=torch.channels_last)
+            self.net_D = self.net_D.to(memory_format=torch.channels_last)
+
+        # Initialize amp.
+        if self.cfg.trainer.amp_config.enabled:
+            print("Using automatic mixed precision training.")
+        self.scaler_G = GradScaler(**vars(self.cfg.trainer.amp_config))
+        self.scaler_D = GradScaler(**vars(self.cfg.trainer.amp_config))
+        # In order to check whether the discriminator/generator has
+        # skipped the last parameter update due to gradient overflow.
+        self.last_step_count_G = 0
+        self.last_step_count_D = 0
+        self.skipped_G = False
+        self.skipped_D = False
+
+        # Initialize data augmentation policy.
+        self.aug_policy = cfg.trainer.aug_policy
+        print("Augmentation policy: {}".format(self.aug_policy))
 
         # Initialize loss functions.
         # All loss names have weights. Some have criterion modules.
         # Mapping from loss names to criterion modules.
-        self.criteria = nn.ModuleDict()
+        self.criteria = torch.nn.ModuleDict()
         # Mapping from loss names to loss weights.
         self.weights = dict()
         self.losses = dict(gen_update=dict(), dis_update=dict())
@@ -93,10 +113,10 @@ class BaseTrainer(object):
         self.start_iteration_time = None
         self.start_epoch_time = None
         self.elapsed_iteration_time = 0
-        self.time_iteration = -1
-        self.time_epoch = -1
+        self.time_iteration = None
+        self.time_epoch = None
         self.best_fid = None
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             self.accu_gen_forw_iter_time = 0
             self.accu_gen_loss_iter_time = 0
             self.accu_gen_back_iter_time = 0
@@ -111,6 +131,29 @@ class BaseTrainer(object):
         self._init_tensorboard()
         self._init_hparams()
 
+        # Initialize validation parameters.
+        self.val_sample_size = getattr(cfg.trainer, 'val_sample_size', 50000)
+        self.kid_num_subsets = getattr(cfg.trainer, 'kid_num_subsets', 10)
+        self.kid_subset_size = self.val_sample_size // self.kid_num_subsets
+        self.metrics_path = os.path.join(torch.hub.get_dir(), 'metrics')
+        self.best_metrics = {}
+        self.eval_networks = getattr(cfg.trainer, 'eval_network', ['clean_inception'])
+        if self.cfg.metrics_iter is None:
+            self.cfg.metrics_iter = self.cfg.snapshot_save_iter
+        if self.cfg.metrics_epoch is None:
+            self.cfg.metrics_epoch = self.cfg.snapshot_save_epoch
+
+        # AWS credentials.
+        if hasattr(cfg, 'aws_credentials_file'):
+            with open(cfg.aws_credentials_file) as fin:
+                self.credentials = json.load(fin)
+        else:
+            self.credentials = None
+
+        if 'TORCH_HOME' not in os.environ:
+            os.environ['TORCH_HOME'] = os.path.join(
+                os.environ['HOME'], ".cache")
+
     def _init_tensorboard(self):
         r"""Initialize the tensorboard. Different algorithms might require
         different performance metrics. Hence, custom tensorboard
@@ -118,18 +161,12 @@ class BaseTrainer(object):
         """
         # Logging frequency: self.cfg.logging_iter
         self.meters = {}
-        names = ['optim/gen_lr', 'optim/dis_lr', 'time/iteration', 'time/epoch']
-        for name in names:
-            self.meters[name] = Meter(name)
 
         # Logging frequency: self.cfg.snapshot_save_iter
-        names = ['FID', 'best_FID']
         self.metric_meters = {}
-        for name in names:
-            self.metric_meters[name] = Meter(name)
 
         # Logging frequency: self.cfg.image_display_iter
-        self.image_meter = Meter('images')
+        self.image_meter = Meter('images', reduce=False)
 
     def _init_hparams(self):
         r"""Initialize a dictionary of hyperparameters that we want to monitor
@@ -148,14 +185,12 @@ class BaseTrainer(object):
                                'time/epoch': self.time_epoch,
                                'optim/gen_lr': self.sch_G.get_last_lr()[0],
                                'optim/dis_lr': self.sch_D.get_last_lr()[0]},
-                              self.meters)
+                              self.meters,
+                              reduce=False)
         # Logs for loss values. Different models have different losses.
         self._write_loss_meters()
         # Other custom logs.
         self._write_custom_meters()
-
-        # Write all logs to tensorboard.
-        self._flush_meters(self.meters)
 
     def _write_loss_meters(self):
         r"""Write all loss values to tensorboard."""
@@ -163,11 +198,13 @@ class BaseTrainer(object):
             # update is 'gen_update' or 'dis_update'.
             assert update == 'gen_update' or update == 'dis_update'
             for loss_name, loss in losses.items():
-                full_loss_name = update + '/' + loss_name
-                if full_loss_name not in self.meters.keys():
-                    # Create a new meter if it doesn't exist.
-                    self.meters[full_loss_name] = Meter(full_loss_name)
-                self.meters[full_loss_name].write(loss.item())
+                if loss is not None:
+                    full_loss_name = update + '/' + loss_name
+                    if full_loss_name not in self.meters.keys():
+                        # Create a new meter if it doesn't exist.
+                        self.meters[full_loss_name] = Meter(
+                            full_loss_name, reduce=True)
+                    self.meters[full_loss_name].write(loss.item())
 
     def _write_custom_meters(self):
         r"""Dummy member function to be overloaded by the child class.
@@ -176,10 +213,13 @@ class BaseTrainer(object):
         pass
 
     @staticmethod
-    def _write_to_meters(data, meters):
+    def _write_to_meters(data, meters, reduce=True):
         r"""Write values to meters."""
-        for key, value in data.items():
-            meters[key].write(value)
+        if reduce or is_master():
+            for key, value in data.items():
+                if key not in meters:
+                    meters[key] = Meter(key, reduce=reduce)
+                meters[key].write(value)
 
     def _flush_meters(self, meters):
         r"""Flush all meters using the current iteration."""
@@ -204,7 +244,7 @@ class BaseTrainer(object):
                          self.sch_G, self.sch_D,
                          current_epoch, current_iteration)
 
-    def load_checkpoint(self, cfg, checkpoint_path, resume=None):
+    def load_checkpoint(self, cfg, checkpoint_path, resume=None, load_sch=True):
         r"""Load network weights, optimizer parameters, scheduler parameters
         from a checkpoint.
 
@@ -234,32 +274,55 @@ class BaseTrainer(object):
             current_epoch = 0
             current_iteration = 0
             print('No checkpoint found.')
-            return current_epoch, current_iteration
+            resume = False
+            return resume, current_epoch, current_iteration
         # Load checkpoint
         checkpoint = torch.load(
             checkpoint_path, map_location=lambda storage, loc: storage)
         current_epoch = 0
         current_iteration = 0
         if resume:
-            self.net_G.load_state_dict(checkpoint['net_G'])
+            self.net_G.load_state_dict(checkpoint['net_G'], strict=self.cfg.trainer.strict_resume)
             if not self.is_inference:
-                self.net_D.load_state_dict(checkpoint['net_D'])
+                self.net_D.load_state_dict(checkpoint['net_D'], strict=self.cfg.trainer.strict_resume)
                 if 'opt_G' in checkpoint:
-                    self.opt_G.load_state_dict(checkpoint['opt_G'])
-                    self.opt_D.load_state_dict(checkpoint['opt_D'])
-                    self.sch_G.load_state_dict(checkpoint['sch_G'])
-                    self.sch_D.load_state_dict(checkpoint['sch_D'])
                     current_epoch = checkpoint['current_epoch']
                     current_iteration = checkpoint['current_iteration']
+                    self.opt_G.load_state_dict(checkpoint['opt_G'])
+                    self.opt_D.load_state_dict(checkpoint['opt_D'])
+                    if load_sch:
+                        self.sch_G.load_state_dict(checkpoint['sch_G'])
+                        self.sch_D.load_state_dict(checkpoint['sch_D'])
+                    else:
+                        if self.cfg.gen_opt.lr_policy.iteration_mode:
+                            self.sch_G.last_epoch = current_iteration
+                        else:
+                            self.sch_G.last_epoch = current_epoch
+                        if self.cfg.dis_opt.lr_policy.iteration_mode:
+                            self.sch_D.last_epoch = current_iteration
+                        else:
+                            self.sch_D.last_epoch = current_epoch
                     print('Load from: {}'.format(checkpoint_path))
                 else:
                     print('Load network weights only.')
         else:
-            self.net_G.load_state_dict(checkpoint['net_G'])
-            print('Load generator weights only.')
+            try:
+                self.net_G.load_state_dict(checkpoint['net_G'], strict=self.cfg.trainer.strict_resume)
+                if 'net_D' in checkpoint:
+                    self.net_D.load_state_dict(checkpoint['net_D'], strict=self.cfg.trainer.strict_resume)
+            except Exception:
+                if self.cfg.trainer.model_average_config.enabled:
+                    net_G_module = self.net_G.module.module
+                else:
+                    net_G_module = self.net_G.module
+                if hasattr(net_G_module, 'load_pretrained_network'):
+                    net_G_module.load_pretrained_network(self.net_G, checkpoint['net_G'])
+                    print('Load generator weights only.')
+                else:
+                    raise ValueError('Checkpoint cannot be loaded.')
 
         print('Done with loading the checkpoint.')
-        return current_epoch, current_iteration
+        return resume, current_epoch, current_iteration
 
     def start_of_epoch(self, current_epoch):
         r"""Things to do before an epoch.
@@ -280,6 +343,8 @@ class BaseTrainer(object):
         """
         data = self._start_of_iteration(data, current_iteration)
         data = to_cuda(data)
+        if self.cfg.trainer.channels_last:
+            data = to_channels_last(data)
         self.current_iteration = current_iteration
         if not self.is_inference:
             self.net_D.train()
@@ -302,8 +367,8 @@ class BaseTrainer(object):
         # iteration mode.
         if self.cfg.gen_opt.lr_policy.iteration_mode:
             self.sch_G.step()
-        # Update the learning rate policy for the discriminator if operating
-        # in the iteration mode.
+        # Update the learning rate policy for the discriminator if operating in
+        # the iteration mode.
         if self.cfg.dis_opt.lr_policy.iteration_mode:
             self.sch_D.step()
 
@@ -318,7 +383,7 @@ class BaseTrainer(object):
                   '{:6f}.'.format(current_iteration, ave_t))
             self.elapsed_iteration_time = 0
 
-            if getattr(self.cfg, 'speed_benchmark', False):
+            if self.cfg.speed_benchmark:
                 # Below code block only needed when analyzing computation
                 # bottleneck.
                 print('\tGenerator FWD time {:6f}'.format(
@@ -354,20 +419,34 @@ class BaseTrainer(object):
                 self.accu_dis_step_iter_time = 0
 
         self._end_of_iteration(data, current_epoch, current_iteration)
+
         # Save everything to the checkpoint.
-        if current_iteration >= self.cfg.snapshot_save_start_iter and \
-                current_iteration % self.cfg.snapshot_save_iter == 0:
+        if current_iteration % self.cfg.snapshot_save_iter == 0:
+            if current_iteration >= self.cfg.snapshot_save_start_iter:
+                self.save_checkpoint(current_epoch, current_iteration)
+
+        # Compute metrics.
+        if current_iteration % self.cfg.metrics_iter == 0:
             self.save_image(self._get_save_path('images', 'jpg'), data)
-            self.save_checkpoint(current_epoch, current_iteration)
             self.write_metrics()
+
         # Compute image to be saved.
         elif current_iteration % self.cfg.image_save_iter == 0:
             self.save_image(self._get_save_path('images', 'jpg'), data)
         elif current_iteration % self.cfg.image_display_iter == 0:
             image_path = os.path.join(self.cfg.logdir, 'images', 'current.jpg')
             self.save_image(image_path, data)
+
+        # Logging.
+        self._write_tensorboard()
         if current_iteration % self.cfg.logging_iter == 0:
-            self._write_tensorboard()
+            # Write all logs to tensorboard.
+            self._flush_meters(self.meters)
+
+        from torch.distributed import barrier
+        import torch.distributed as dist
+        if dist.is_initialized():
+            barrier()
 
     def end_of_epoch(self, data, current_epoch, current_iteration):
         r"""Things to do after an epoch.
@@ -394,11 +473,15 @@ class BaseTrainer(object):
                                                      elapsed_epoch_time))
         self.time_epoch = elapsed_epoch_time
         self._end_of_epoch(data, current_epoch, current_iteration)
+
         # Save everything to the checkpoint.
-        if current_epoch >= self.cfg.snapshot_save_start_epoch and \
-                current_epoch % self.cfg.snapshot_save_epoch == 0:
+        if current_iteration % self.cfg.snapshot_save_iter == 0:
+            if current_epoch >= self.cfg.snapshot_save_start_epoch:
+                self.save_checkpoint(current_epoch, current_iteration)
+
+        # Compute metrics.
+        if current_iteration % self.cfg.metrics_iter == 0:
             self.save_image(self._get_save_path('images', 'jpg'), data)
-            self.save_checkpoint(current_epoch, current_iteration)
             self.write_metrics()
 
     def pre_process(self, data):
@@ -410,34 +493,39 @@ class BaseTrainer(object):
             data (dict): Data used for the current iteration.
         """
 
-    def recalculate_model_average_batch_norm_statistics(self, data_loader):
+    def recalculate_batch_norm_statistics(self, data_loader, averaged=True):
         r"""Update the statistics in the moving average model.
 
         Args:
             data_loader (torch.utils.data.DataLoader): Data loader for
                 estimating the statistics.
+            averaged (Boolean): True/False, we recalculate batch norm statistics for EMA/regular
         """
-        if not self.cfg.trainer.model_average:
+        if not self.cfg.trainer.model_average_config.enabled:
             return
+        if averaged:
+            net_G = self.net_G.module.averaged_model
+        else:
+            net_G = self.net_G_module
         model_average_iteration = \
-            self.cfg.trainer.model_average_batch_norm_estimation_iteration
+            self.cfg.trainer.model_average_config.num_batch_norm_estimation_iterations
         if model_average_iteration == 0:
             return
         with torch.no_grad():
             # Accumulate bn stats..
-            self.net_G.module.averaged_model.train()
+            net_G.train()
             # Reset running stats.
-            self.net_G.module.averaged_model.apply(reset_batch_norm)
+            net_G.apply(reset_batch_norm)
             for cal_it, cal_data in enumerate(data_loader):
                 if cal_it >= model_average_iteration:
                     print('Done with {} iterations of updating batch norm '
                           'statistics'.format(model_average_iteration))
                     break
                 cal_data = to_device(cal_data, 'cuda')
+                cal_data = self.pre_process(cal_data)
                 # Averaging over all batches
-                self.net_G.module.averaged_model.apply(
-                    calibrate_batch_norm_momentum)
-                self.net_G.module.averaged_model(cal_data)
+                net_G.apply(calibrate_batch_norm_momentum)
+                net_G(cal_data)
 
     def save_image(self, path, data):
         r"""Compute visualization images and save them to the disk.
@@ -449,7 +537,8 @@ class BaseTrainer(object):
         self.net_G.eval()
         vis_images = self._get_visualizations(data)
         if is_master() and vis_images is not None:
-            vis_images = torch.cat(vis_images, dim=3).float()
+            vis_images = torch.cat(
+                [img for img in vis_images if img is not None], dim=3).float()
             vis_images = (vis_images + 1) / 2
             print('Save output images to {}'.format(path))
             vis_images.clamp_(0, 1)
@@ -459,6 +548,7 @@ class BaseTrainer(object):
             if self.cfg.trainer.image_to_tensorboard:
                 self.image_meter.write_image(image_grid, self.current_iteration)
             torchvision.utils.save_image(image_grid, path, nrow=1)
+            wandb.log({os.path.splitext(os.path.basename(path))[0]: [wandb.Image(path)]})
 
     def write_metrics(self):
         r"""Write metrics to the tensorboard."""
@@ -469,10 +559,8 @@ class BaseTrainer(object):
             else:
                 self.best_fid = cur_fid
             metric_dict = {'FID': cur_fid, 'best_FID': self.best_fid}
-            self._write_to_meters(metric_dict, self.metric_meters)
+            self._write_to_meters(metric_dict, self.metric_meters, reduce=False)
             self._flush_meters(self.metric_meters)
-            if self.cfg.trainer.hparam_to_tensorboard:
-                add_hparams(self.hparam_dict, metric_dict)
 
     def _get_save_path(self, subdir, ext):
         r"""Get the image save path.
@@ -520,14 +608,12 @@ class BaseTrainer(object):
 
         if real:
             if self.cfg.trainer.gan_relativistic:
-                return _get_difference(net_D_output['real_outputs'],
-                                       net_D_output['fake_outputs'])
+                return _get_difference(net_D_output['real_outputs'], net_D_output['fake_outputs'])
             else:
                 return net_D_output['real_outputs']
         else:
             if self.cfg.trainer.gan_relativistic:
-                return _get_difference(net_D_output['fake_outputs'],
-                                       net_D_output['real_outputs'])
+                return _get_difference(net_D_output['fake_outputs'], net_D_output['real_outputs'])
             else:
                 return net_D_output['fake_outputs']
 
@@ -593,35 +679,65 @@ class BaseTrainer(object):
         Args:
             data (dict): Data used for the current iteration.
         """
-        self.opt_G.zero_grad()
+        update_finished = False
+        while not update_finished:
+            # Set requires_grad flags.
+            requires_grad(self.net_G_module, True)
+            requires_grad(self.net_D, False)
 
-        # Set requires_grad flags.
-        requires_grad(self.net_G_module, True)
-        requires_grad(self.net_D, False)
+            # Compute the loss.
+            self._time_before_forward()
+            with autocast(enabled=self.cfg.trainer.amp_config.enabled):
+                total_loss = self.gen_forward(data)
+            if total_loss is None:
+                return
 
-        # Compute the loss.
-        self._time_before_forward()
-        total_loss = self.gen_forward(data)
-        if total_loss is None:
-            return
+            # Zero-grad and backpropagate the loss.
+            self.opt_G.zero_grad(set_to_none=True)
+            self._time_before_backward()
+            self.scaler_G.scale(total_loss).backward()
 
-        # Backpropagate the loss.
-        self._time_before_backward()
-        with amp.scale_loss(total_loss, self.opt_G, loss_id=0) as scaled_loss:
-            scaled_loss.backward()
+            # Optionally clip gradient norm.
+            if hasattr(self.cfg.gen_opt, 'clip_grad_norm'):
+                self.scaler_G.unscale_(self.opt_G)
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    self.net_G_module.parameters(),
+                    self.cfg.gen_opt.clip_grad_norm
+                )
+                self.gen_grad_norm = total_norm
+                if torch.isfinite(total_norm) and \
+                        total_norm > self.cfg.gen_opt.clip_grad_norm:
+                    # print(f"Gradient norm of the generator ({total_norm}) "
+                    #       f"too large.")
+                    if getattr(self.cfg.gen_opt, 'skip_grad', False):
+                        print(f"Skip gradient update.")
+                        self.opt_G.zero_grad(set_to_none=True)
+                        self.scaler_G.step(self.opt_G)
+                        self.scaler_G.update()
+                        break
+                    # else:
+                    #     print(f"Clip gradient norm to "
+                    #           f"{self.cfg.gen_opt.clip_grad_norm}.")
 
-        # Optionally clip gradient norm.
-        if hasattr(self.cfg.gen_opt, 'clip_grad_norm'):
-            nn.utils.clip_grad_norm_(
-                amp.master_params(self.opt_G), self.cfg.gen_opt.clip_grad_norm)
+            # Perform an optimizer step.
+            self._time_before_step()
+            self.scaler_G.step(self.opt_G)
+            self.scaler_G.update()
+            # Whether the step above was skipped.
+            if self.last_step_count_G == self.opt_G._step_count:
+                print("Generator overflowed!")
+                if not torch.isfinite(total_loss):
+                    print("Generator loss is not finite. Skip this iteration!")
+                    update_finished = True
+            else:
+                self.last_step_count_G = self.opt_G._step_count
+                update_finished = True
 
-        # Perform an optimizer step.
-        self._time_before_step()
-        self.opt_G.step()
+        self._extra_gen_step(data)
 
         # Update model average.
         self._time_before_model_avg()
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             self.net_G.module.update_average()
 
         self._detach_losses()
@@ -631,32 +747,70 @@ class BaseTrainer(object):
         r"""Every trainer should implement its own generator forward."""
         raise NotImplementedError
 
+    def _extra_gen_step(self, data):
+        pass
+
     def dis_update(self, data):
         r"""Update the discriminator.
 
         Args:
             data (dict): Data used for the current iteration.
         """
-        self.opt_D.zero_grad()
+        update_finished = False
+        while not update_finished:
+            # Set requires_grad flags.
+            requires_grad(self.net_G_module, False)
+            requires_grad(self.net_D, True)
 
-        # Set requires_grad flags.
-        requires_grad(self.net_G_module, False)
-        requires_grad(self.net_D, True)
+            # Compute the loss.
+            self._time_before_forward()
+            with autocast(enabled=self.cfg.trainer.amp_config.enabled):
+                total_loss = self.dis_forward(data)
+            if total_loss is None:
+                return
 
-        # Compute the loss.
-        self._time_before_forward()
-        total_loss = self.dis_forward(data)
-        if total_loss is None:
-            return
+            # Zero-grad and backpropagate the loss.
+            self.opt_D.zero_grad(set_to_none=True)
+            self._time_before_backward()
+            self.scaler_D.scale(total_loss).backward()
 
-        # Backpropagate the loss.
-        self._time_before_backward()
-        with amp.scale_loss(total_loss, self.opt_D, loss_id=1) as scaled_loss:
-            scaled_loss.backward()
+            # Optionally clip gradient norm.
+            if hasattr(self.cfg.dis_opt, 'clip_grad_norm'):
+                self.scaler_D.unscale_(self.opt_D)
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    self.net_D.parameters(), self.cfg.dis_opt.clip_grad_norm
+                )
+                self.dis_grad_norm = total_norm
+                if torch.isfinite(total_norm) and \
+                        total_norm > self.cfg.dis_opt.clip_grad_norm:
+                    print(f"Gradient norm of the discriminator ({total_norm}) "
+                          f"too large.")
+                    if getattr(self.cfg.dis_opt, 'skip_grad', False):
+                        print(f"Skip gradient update.")
+                        self.opt_D.zero_grad(set_to_none=True)
+                        self.scaler_D.step(self.opt_D)
+                        self.scaler_D.update()
+                        continue
+                    else:
+                        print(f"Clip gradient norm to "
+                              f"{self.cfg.dis_opt.clip_grad_norm}.")
 
-        # Perform an optimizer step.
-        self._time_before_step()
-        self.opt_D.step()
+            # Perform an optimizer step.
+            self._time_before_step()
+            self.scaler_D.step(self.opt_D)
+            self.scaler_D.update()
+            # Whether the step above was skipped.
+            if self.last_step_count_D == self.opt_D._step_count:
+                print("Discriminator overflowed!")
+                if not torch.isfinite(total_loss):
+                    print("Discriminator loss is not finite. "
+                          "Skip this iteration!")
+                    update_finished = True
+            else:
+                self.last_step_count_D = self.opt_D._step_count
+                update_finished = True
+
+        self._extra_dis_step(data)
 
         self._detach_losses()
         self._time_before_leave_dis()
@@ -664,6 +818,9 @@ class BaseTrainer(object):
     def dis_forward(self, data):
         r"""Every trainer should implement its own discriminator forward."""
         raise NotImplementedError
+
+    def _extra_dis_step(self, data):
+        pass
 
     def test(self, data_loader, output_dir, inference_args):
         r"""Compute results images for a batch of input data and save the
@@ -673,7 +830,7 @@ class BaseTrainer(object):
             data_loader (torch.utils.data.DataLoader): PyTorch dataloader.
             output_dir (str): Target location for saving the output image.
         """
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G = self.net_G.module.averaged_model
         else:
             net_G = self.net_G.module
@@ -720,7 +877,7 @@ class BaseTrainer(object):
         r"""
         Record time before applying forward.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             self.forw_time = time.time()
 
@@ -728,7 +885,7 @@ class BaseTrainer(object):
         r"""
         Record time before computing loss.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             self.loss_time = time.time()
 
@@ -736,7 +893,7 @@ class BaseTrainer(object):
         r"""
         Record time before applying backward.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             self.back_time = time.time()
 
@@ -744,7 +901,7 @@ class BaseTrainer(object):
         r"""
         Record time before updating the weights
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             self.step_time = time.time()
 
@@ -752,7 +909,7 @@ class BaseTrainer(object):
         r"""
         Record time before applying model average.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             self.avg_time = time.time()
 
@@ -761,7 +918,7 @@ class BaseTrainer(object):
         Record forward, backward, loss, and model average time for the
         generator update.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             end_time = time.time()
             self.accu_gen_forw_iter_time += self.loss_time - self.forw_time
@@ -774,7 +931,7 @@ class BaseTrainer(object):
         r"""
         Record forward, backward, loss time for the discriminator update.
         """
-        if getattr(self.cfg, 'speed_benchmark', False):
+        if self.cfg.speed_benchmark:
             torch.cuda.synchronize()
             end_time = time.time()
             self.accu_dis_forw_iter_time += self.loss_time - self.forw_time

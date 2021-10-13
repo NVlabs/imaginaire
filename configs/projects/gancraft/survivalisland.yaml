@@ -1,0 +1,242 @@
+pretrained_weight: 1iPHz_GoOHs5LdwBegJzDwTuj-U14Y2cp
+
+inference_args:
+    # Which preset camera trajectory do you want to use? 0-7
+    # 0: Camera orbiting the scene & looking at the center
+    # 1: Camera orbiting the scene & zooming in
+    # 2: Camera orbiting the scene & coming closer and closer to the center
+    # 3: Similar to 2, camera orbiting at the opposite direction
+    # 4: Simliar to 2, camera stays further away from the center
+    # 5: Camera sits at the center and look outwards
+    # 6: Camera rises while looking down
+    # 7: Camera really far away looking down at a 45deg angle
+    camera_mode: 4
+    # How many output images?
+    cam_maxstep: 10
+    # Which random seed to use for output image style?
+    seed: 0
+    # If a style image is not specified, a random style code will be used.
+    style_img_path: null
+    # See imaginaire/generators/gancraft.py::inference for extra inference args (resolutions, number of samples, etc.)
+
+image_save_iter: 5000
+snapshot_save_epoch: 5
+snapshot_save_iter: 10000
+max_epoch: 400
+logging_iter: 10
+
+trainer:
+    type: imaginaire.trainers.gancraft
+    model_average_config:
+        enabled: False
+    amp_config:
+        enabled: False
+    perceptual_loss:
+        mode: 'vgg19'
+        layers: ['relu_3_1', 'relu_4_1', 'relu_5_1']
+        weights: [0.125, 0.25, 1.0]
+    loss_weight:
+        l2: 10.0
+        gan: 0.5
+        pseudo_gan: 0.5
+        perceptual: 10.0
+        kl: 0.05
+    init:
+        type: xavier
+        gain: 0.02
+
+    # SPADE/GauGAN model for pseudo-GT generation.
+    gaugan_loader:
+        config: configs/projects/spade/landscapes/lhq.yaml
+
+    image_to_tensorboard: True
+    distributed_data_parallel_params:
+        find_unused_parameters: False
+        broadcast_buffers: False
+
+gen_opt:
+    type: adam
+    lr: 0.0001
+    eps: 1.e-7
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 400
+        gamma: 0.1
+    param_groups:
+        blk_feats:
+            lr: 0.001
+        render_net:
+            lr: 0.0001
+        sky_net:
+            lr: 0.0001
+        style_net:
+            lr: 0.0001
+        style_encoder:
+            lr: 0.0001
+        denoiser:
+            lr: 0.0001
+
+dis_opt:
+    type: adam
+    lr: 0.0004
+    eps: 1.e-7
+    adam_beta1: 0.
+    adam_beta2: 0.999
+    lr_policy:
+        iteration_mode: False
+        type: step
+        step_size: 400
+        gamma: 0.1
+
+gen:
+    type: imaginaire.generators.gancraft
+    voxel_path: projects/gancraft/test_data/worlds/survivalisland_blocks.bin
+    voxel_shape: [256,512,512]
+    voxel_preproc_ver: 3
+
+    blk_feat_dim: 64
+
+    pe_lvl_feat: 4
+    pe_incl_orig_feat: False
+    pe_no_pe_feat_dim: 40
+    pe_lvl_raydir: 0
+    pe_incl_orig_raydir: False
+    style_dims: 128  # Set to 0 to disable style.
+    interm_style_dims: 256
+    final_feat_dim: 64
+
+    # Number of pixels removed from each edge to reduce boundary artifact of CNN
+    # both sides combined (8 -> 4 on left and 4 on right).
+    pad: 6
+
+    # ======== Sky network ========
+    pe_lvl_raydir_sky: 5
+    pe_incl_orig_raydir_sky: True
+
+    # ======== Style Encoder =========
+    # Comment out to disable style encoder.
+    style_enc:
+        num_filters: 64
+        kernel_size: 3
+        weight_norm_type: 'none'
+
+    stylenet_model: StyleMLP
+    stylenet_model_kwargs:
+        normalize_input: True
+        num_layers: 5
+
+    mlp_model: RenderMLP
+    mlp_model_kwargs:
+        use_seg: True
+
+    # ======== Ray Casting Params ========
+    num_blocks_early_stop: 6
+    num_samples: 4 # Original model uses 24. Reduced to 4 to allow training on 12GB GPUs (with significant performance penalty)
+    sample_depth: 3 # Stop the ray after certain depth
+    coarse_deterministic_sampling: False
+    sample_use_box_boundaries: False # Including voxel boundaries into the sample
+
+    # ======== Blender ========
+    raw_noise_std: 0.0
+    dists_scale: 0.25
+    clip_feat_map: True
+    # Prevent sky from leaking to the foreground.
+    keep_sky_out: True
+    keep_sky_out_avgpool: True
+    sky_global_avgpool: True
+
+    # ======== Label translator ========
+    reduced_label_set: True
+    use_label_smooth: True
+    use_label_smooth_real: True
+    use_label_smooth_pgt: True
+    label_smooth_dia: 11
+
+    # ======== Camera sampler ========
+    camera_sampler_type: 'traditional'
+    cam_res: [360, 640] # Camera resolution before cropping.
+    crop_size: [256, 256] # Actual crop size is crop_size+pad. It should generally match random_crop_h_w in dataloader.
+
+    # Threshold for rejecting camera poses that will result in a seg mask with low entropy.
+    # Generally, 0.5 min, 0.8 max.
+    camera_min_entropy: 0.75
+
+    # Threshold for rejecting camera poses that are too close to the objects.
+    camera_rej_avg_depth: 2.0
+
+dis:
+    type: imaginaire.discriminators.gancraft
+    image_channels: 3
+    num_labels: 12  # Same as num_reduced_lbls.
+    use_label: True
+    num_filters: 128
+    fpse_kernel_size: 3
+    activation_norm_type: 'none'
+    weight_norm_type: spectral
+    smooth_resample: True
+
+# Data options.
+data:
+    type: imaginaire.datasets.paired_images
+    num_workers: 8
+    input_types:
+        - images:
+            ext: jpg
+            num_channels: 3
+            normalize: True
+            use_dont_care: False
+        - seg_maps:
+            ext: png
+            num_channels: 1
+            is_mask: True
+            normalize: False
+
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 184
+    input_labels:
+        - seg_maps
+
+    # Which lmdb contains the ground truth image.
+    input_image:
+        - images
+
+    # Train dataset details.
+    train:
+        dataset_type: lmdb
+        # Input LMDBs.
+        roots:
+            - datasets/lmdb_coco_landscapes
+        # Batch size per GPU.
+        batch_size: 1
+        # Data augmentations to be performed in given order.
+        augmentations:
+            resize_smallest_side: 256
+            # Rotate in (-rotate, rotate) in degrees.
+            rotate: 0
+            # Scale image by factor \in [1, 1+random_scale_limit].
+            random_scale_limit: 0.2
+            # Horizontal flip?
+            horizontal_flip: True
+            # Crop size.
+            random_crop_h_w: 256, 256
+    # Train dataset details.
+    val:
+        dataset_type: lmdb
+        # Input LMDBs.
+        roots:
+            - datasets/lmdb_coco_landscapes
+        # Batch size per GPU.
+        batch_size: 1
+        # Data augmentations to be performed in given order.
+        augmentations:
+            # Crop size.
+            resize_h_w: 256, 256
+
+test_data:
+    type: imaginaire.datasets.dummy
+    num_workers: 0

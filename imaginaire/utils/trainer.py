@@ -1,23 +1,19 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 import importlib
 import random
-
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.optim import SGD, Adam, RMSprop, lr_scheduler
 
-import apex
-from apex import amp
-from apex.optimizers import FusedAdam, FusedSGD
 from imaginaire.optimizers import Fromage, Madam
-from imaginaire.utils.distributed import get_rank
+from imaginaire.utils.distributed import get_rank, get_world_size
 from imaginaire.utils.distributed import master_only_print as print
-from imaginaire.utils.init_weight import weights_init
+from imaginaire.utils.init_weight import weights_init, weights_rescale
 from imaginaire.utils.model_average import ModelAverage
 
 
@@ -30,6 +26,7 @@ def set_random_seed(seed, by_rank=False):
     """
     if by_rank:
         seed += get_rank()
+    print(f"Using random seed {seed}")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -72,7 +69,7 @@ def get_model_optimizer_and_scheduler(cfg, seed=0):
     initialized to have the same network weights. We will then use different
     random seeds for different GPUs. After this we will wrap the generator
     with a moving average model if applicable. It is followed by getting the
-    optimizers, amp initialization, and data distributed data parallel wrapping.
+    optimizers and data distributed data parallel wrapping.
 
     Args:
         cfg (obj): Global configuration.
@@ -94,8 +91,8 @@ def get_model_optimizer_and_scheduler(cfg, seed=0):
     # Construct networks
     lib_G = importlib.import_module(cfg.gen.type)
     lib_D = importlib.import_module(cfg.dis.type)
-    net_G = lib_G.Generator(cfg.gen, cfg.data).to('cuda')
-    net_D = lib_D.Discriminator(cfg.dis, cfg.data).to('cuda')
+    net_G = lib_G.Generator(cfg.gen, cfg.data)
+    net_D = lib_D.Discriminator(cfg.dis, cfg.data)
     print('Initialize net_G and net_D weights using '
           'type: {} gain: {}'.format(cfg.trainer.init.type,
                                      cfg.trainer.init.gain))
@@ -104,6 +101,13 @@ def get_model_optimizer_and_scheduler(cfg, seed=0):
         cfg.trainer.init.type, cfg.trainer.init.gain, init_bias))
     net_D.apply(weights_init(
         cfg.trainer.init.type, cfg.trainer.init.gain, init_bias))
+    net_G.apply(weights_rescale())
+    net_D.apply(weights_rescale())
+    # for name, p in net_G.named_parameters():
+    #     if 'modulation' in name and 'bias' in name:
+    #         nn.init.constant_(p.data, 1.)
+    net_G = net_G.to('cuda')
+    net_D = net_D.to('cuda')
     # Different GPU copies of the same model will receive noises
     # initialized with different random seeds (if applicable) thanks to the
     # set_random_seed command (GPU #K has random seed = args.seed + K).
@@ -144,16 +148,17 @@ def wrap_model_and_optimizer(cfg, net_G, net_D, opt_G, opt_D):
           - opt_D (obj): Discriminator optimizer object.
     """
     # Apply model average wrapper.
-    if cfg.trainer.model_average:
-        net_G = ModelAverage(net_G, cfg.trainer.model_average_beta,
-                             cfg.trainer.model_average_start_iteration,
-                             cfg.trainer.model_average_remove_sn)
-    # AMP initialization.
-    [net_G, net_D], [opt_G, opt_D] = \
-        amp.initialize([net_G, net_D], [opt_G, opt_D],
-                       opt_level=cfg.trainer.amp, num_losses=2)
-    # For dealing with numerical issues that might happen during training.
-    if cfg.trainer.model_average:
+    if cfg.trainer.model_average_config.enabled:
+        if hasattr(cfg.trainer.model_average_config, 'g_smooth_img'):
+            # Specifies half-life of the running average of generator weights.
+            cfg.trainer.model_average_config.beta = \
+                0.5 ** (cfg.data.train.batch_size *
+                        get_world_size() / cfg.trainer.model_average_config.g_smooth_img)
+            print(f"EMA Decay Factor: {cfg.trainer.model_average_config.beta}")
+        net_G = ModelAverage(net_G, cfg.trainer.model_average_config.beta,
+                             cfg.trainer.model_average_config.start_iteration,
+                             cfg.trainer.model_average_config.remove_sn)
+    if cfg.trainer.model_average_config.enabled:
         net_G_module = net_G.module
     else:
         net_G_module = net_G
@@ -191,7 +196,7 @@ class WrappedModel(nn.Module):
 
 
 def _wrap_model(cfg, model):
-    r"""Wrap a model for apex based distributed data parallel training.
+    r"""Wrap a model for distributed data parallel training.
 
     Args:
         model (obj): PyTorch network model.
@@ -200,17 +205,26 @@ def _wrap_model(cfg, model):
         (obj): Wrapped PyTorch network model.
     """
     if torch.distributed.is_available() and dist.is_initialized():
-        ddp = cfg.trainer.distributed_data_parallel
-        if ddp == 'pytorch':
-            return torch.nn.parallel.DistributedDataParallel(
-                model,
-                device_ids=[cfg.local_rank],
-                output_device=cfg.local_rank,
-                find_unused_parameters=True)
-        else:
-            delay_allreduce = cfg.trainer.delay_allreduce
-            return apex.parallel.DistributedDataParallel(
-                model, delay_allreduce=delay_allreduce)
+        # ddp = cfg.trainer.distributed_data_parallel
+        find_unused_parameters = cfg.trainer.distributed_data_parallel_params.find_unused_parameters
+        return torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[cfg.local_rank],
+            output_device=cfg.local_rank,
+            find_unused_parameters=find_unused_parameters,
+            broadcast_buffers=False
+        )
+        # if ddp == 'pytorch':
+        #     return torch.nn.parallel.DistributedDataParallel(
+        #         model,
+        #         device_ids=[cfg.local_rank],
+        #         output_device=cfg.local_rank,
+        #         find_unused_parameters=find_unused_parameters,
+        #         broadcast_buffers=False)
+        # else:
+        #     delay_allreduce = cfg.trainer.delay_allreduce
+        #     return apex.parallel.DistributedDataParallel(
+        #         model, delay_allreduce=delay_allreduce)
     else:
         return WrappedModel(model)
 
@@ -232,6 +246,22 @@ def get_scheduler(cfg_opt, opt):
             gamma=cfg_opt.lr_policy.gamma)
     elif cfg_opt.lr_policy.type == 'constant':
         scheduler = lr_scheduler.LambdaLR(opt, lambda x: 1)
+    elif cfg_opt.lr_policy.type == 'linear':
+        # Start linear decay from here.
+        decay_start = cfg_opt.lr_policy.decay_start
+        # End linear decay here.
+        # Continue to train using the lowest learning rate till the end.
+        decay_end = cfg_opt.lr_policy.decay_end
+        # Lowest learning rate multiplier.
+        decay_target = cfg_opt.lr_policy.decay_target
+
+        def sch(x):
+            return min(
+                max(((x - decay_start) * decay_target + decay_end - x) / (
+                    decay_end - decay_start
+                ), decay_target), 1.
+            )
+        scheduler = lr_scheduler.LambdaLR(opt, lambda x: sch(x))
     else:
         return NotImplementedError('Learning rate policy {} not implemented.'.
                                    format(cfg_opt.lr_policy.type))
@@ -269,6 +299,11 @@ def get_optimizer_for_params(cfg_opt, params):
     """
     # We will use fuse optimizers by default.
     fused_opt = cfg_opt.fused_opt
+    try:
+        from apex.optimizers import FusedAdam
+    except:  # noqa
+        fused_opt = False
+
     if cfg_opt.type == 'adam':
         if fused_opt:
             opt = FusedAdam(params,
@@ -290,6 +325,7 @@ def get_optimizer_for_params(cfg_opt, params):
                       eps=cfg_opt.eps, weight_decay=cfg_opt.weight_decay)
     elif cfg_opt.type == 'sgd':
         if fused_opt:
+            from apex.optimizers import FusedSGD
             opt = FusedSGD(params,
                            lr=cfg_opt.lr,
                            momentum=cfg_opt.momentum,

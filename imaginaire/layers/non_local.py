@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -21,15 +21,22 @@ class NonLocal2dBlock(nn.Module):
             scaling parameter to (-1, 1).
         weight_norm_type (str, optional, default='none'):
             Type of weight normalization.
-            ``'none'``, ``'spectral'``, ``'weight'``
-            or ``'weight_demod'``.
+            ``'none'``, ``'spectral'``, ``'weight'``.
+        weight_norm_params (obj, optional, default=None):
+            Parameters of weight normalization.
+            If not ``None``, weight_norm_params.__dict__ will be used as
+            keyword arguments when initializing weight normalization.
+        bias (bool, optional, default=True): If ``True``, adds bias in the
+            convolutional blocks.
     """
 
     def __init__(self,
                  in_channels,
                  scale=True,
                  clamp=False,
-                 weight_norm_type='none'):
+                 weight_norm_type='none',
+                 weight_norm_params=None,
+                 bias=True):
         super(NonLocal2dBlock, self).__init__()
         self.clamp = clamp
         self.gamma = nn.Parameter(torch.zeros(1)) if scale else 1.0
@@ -38,7 +45,9 @@ class NonLocal2dBlock(nn.Module):
                                     kernel_size=1,
                                     stride=1,
                                     padding=0,
-                                    weight_norm_type=weight_norm_type)
+                                    weight_norm_type=weight_norm_type,
+                                    weight_norm_params=weight_norm_params,
+                                    bias=bias)
         self.theta = base_conv2d_block(in_channels, in_channels // 8)
         self.phi = base_conv2d_block(in_channels, in_channels // 8)
         self.g = base_conv2d_block(in_channels, in_channels // 2)

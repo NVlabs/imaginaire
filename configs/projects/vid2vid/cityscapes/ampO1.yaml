@@ -14,11 +14,13 @@ num_epochs_temporal_step: 20
 # Trainer options.
 trainer:
     type: imaginaire.trainers.vid2vid
-    amp: O1
-    model_average: True
-    model_average_beta: 0.999
-    model_average_start_iteration: 500
-    model_average_batch_norm_estimation_iteration: 0
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: True
+        beta: 0.999
+        start_iteration: 500
+        num_batch_norm_estimation_iterations: 0
     num_videos_to_test: 64
     num_frames_per_video: 10    
     
@@ -126,19 +128,23 @@ data:
         - images:
             ext: png
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - seg_maps:
             ext: png
-            num_channels: 35
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
             normalize: False
-    
-    input_image:
-        - images
+
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 35
     input_labels:
         - seg_maps
-    
+
+    input_image:
+        - images
+
     train:        
         roots:
             - datasets/cityscapes/lmdb/train
@@ -169,20 +175,24 @@ test_data:
     input_types:
         - seg_maps:
             ext: png
-            num_channels: 35
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
             normalize: False
         - images:
             ext: png
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
+
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 35
+    input_labels:
+        - seg_maps
 
     input_image:
         - images
-    input_labels:
-        - seg_maps
-    
+
     test:
         is_lmdb: False
         roots:            

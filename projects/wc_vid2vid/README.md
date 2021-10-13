@@ -7,7 +7,7 @@ A GAN-based approach to generate 2D world renderings that are consistent over ti
 [Paper(full)](https://nvlabs.github.io/wc-vid2vid/files/wc-vid2vid.pdf) |
 [Two Minute Papers Video](https://youtu.be/u4HpryLU-VI)
 
-![](side_by_side.gif)
+![](https://github.com/NVlabs/imaginaire/raw/master/projects/wc_vid2vid/side_by_side.gif)
 
 ## License
 
@@ -61,7 +61,7 @@ cityscapes
         ...
     ...
 ```
-The scripts to perform SfM and generate the unprojection files are attached in this comment: https://github.com/NVlabs/imaginaire/issues/5#issuecomment-720146998.
+We will provide the scripts to perform SfM and generate the unprojection files required by wc_vid2vid in a future update.
 
 - Preprocess the data into LMDB format
 

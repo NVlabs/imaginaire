@@ -34,7 +34,7 @@ We use random dancing videos found on YouTube to crease a YouTube Dancing Datase
 The following shows the example commands to train few-shot vid2vid on the face dataset. Training on the pose dataset is also similar.
 - Download the dataset and put it in the format as following.
 ```
-faceForensics
+face_forensics
 └───images
     └───seq0001
         └───000001.jpg
@@ -60,14 +60,14 @@ faceForensics
 - Preprocess the data into LMDB format
 
 ```bash
-python scripts/build_lmdb.py --config configs/projects/fs_vid2vid/faceForensics/ampO1.yaml --data_root [PATH_TO_DATA] --output_root datasets/faceForensics/lmdb/[train | val] --paired
+python scripts/build_lmdb.py --config configs/projects/fs_vid2vid/face_forensics/ampO1.yaml --data_root [PATH_TO_DATA] --output_root datasets/face_forensics/lmdb/[train | val] --paired
 ```
 
 - Train on 8 GPUs with AMPO1
 
 ```bash
 python -m torch.distributed.launch --nproc_per_node=8 train.py \
---config configs/projects/fs_vid2vid/faceForensics/ampO1.yaml
+--config configs/projects/fs_vid2vid/face_forensics/ampO1.yaml
 ```
 
 ## Inference
@@ -83,13 +83,13 @@ python ./scripts/download_test_data.py --model_name fs_vid2vid
   - Inference command
     ```bash
     python inference.py --single_gpu --num_workers 0 \
-    --config configs/projects/fs_vid2vid/faceForensics/ampO1.yaml \
-    --output_dir projects/fs_vid2vid/output/faceForensics
+    --config configs/projects/fs_vid2vid/face_forensics/ampO1.yaml \
+    --output_dir projects/fs_vid2vid/output/face_forensics
     ```
 
 Below we show an example output video:
 
-<img alt="output" src='output/faceForensics/001.gif' width='600'/>
+<img alt="output" src='001.gif' width='600'/>
 
 ## Citation
 If you use this code for your research, please cite our papers.

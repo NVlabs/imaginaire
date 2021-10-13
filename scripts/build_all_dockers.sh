@@ -1,11 +1,11 @@
 #!/bin/bash
 
-y="20"
+y="21"
 
-for m in 05 06 07 08
+for m in 05 06 07
 do
   rm -rf Dockerfile
-  echo "FROM nvcr.io/nvidia/pytorch:${y}.${m}-py3" > Dockerfile
+  echo "FROM nvcr.io/nvidian/pytorch:${y}.${m}-py3" > Dockerfile
   input="Dockerfile.base"
   while IFS= read -r line
   do

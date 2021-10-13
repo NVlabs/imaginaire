@@ -105,7 +105,7 @@ python ./scripts/download_test_data.py --model_name vid2vid
 
 Below we show an example output video:
 
-<img alt="output" src='output/cityscapes/stuttgart_00.gif' width='600'/>
+<img alt="output" src='stuttgart_00.gif' width='600'/>
 
 
 ## Citation

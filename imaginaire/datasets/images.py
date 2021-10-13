@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -16,6 +16,7 @@ class Dataset(BaseDataset):
     """
 
     def __init__(self, cfg, is_inference=False, is_test=False):
+        self.paired = False
         super(Dataset, self).__init__(cfg, is_inference, is_test)
         self.num_classes = len(self.class_name_to_idx['images'])
         self.sample_class_idx = None
@@ -142,13 +143,18 @@ class Dataset(BaseDataset):
         data = self.apply_ops(data, self.pre_aug_ops)
 
         # Do augmentations for images.
-        data, is_flipped = self.perform_augmentation(data, paired=False)
+        data, is_flipped = self.perform_augmentation(data, paired=False, augment_ops=self.augmentor.augment_ops)
 
         # Apply ops post augmentation.
         data = self.apply_ops(data, self.post_aug_ops)
-        data = self.apply_ops(data, self.full_data_post_aug_ops, full_data=True)
+        data = self.apply_ops(data, self.full_data_post_aug_ops,
+                              full_data=True)
 
         # Convert images to tensor.
+        for data_type in self.image_data_types:
+            for idx in range(len(data[data_type])):
+                data[data_type][idx] = \
+                    data[data_type][idx][:, :, :self.num_channels[data_type]]
         data = self.to_tensor(data)
 
         # Remove any extra dimensions.

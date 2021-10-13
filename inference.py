@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -9,10 +9,11 @@ from imaginaire.utils.cudnn import init_cudnn
 from imaginaire.utils.dataset import get_test_dataloader
 from imaginaire.utils.distributed import init_dist
 from imaginaire.utils.gpu_affinity import set_affinity
-from imaginaire.utils.io import get_checkpoint
+from imaginaire.utils.io import get_checkpoint as get_checkpoint
 from imaginaire.utils.logging import init_logging
 from imaginaire.utils.trainer import \
     (get_model_optimizer_and_scheduler, get_trainer, set_random_seed)
+import imaginaire.config
 
 
 def parse_args():
@@ -30,6 +31,7 @@ def parse_args():
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--single_gpu', action='store_true')
     parser.add_argument('--num_workers', type=int)
+    parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
     return args
 
@@ -39,6 +41,8 @@ def main():
     set_affinity(args.local_rank)
     set_random_seed(args.seed, by_rank=True)
     cfg = Config(args.config)
+    imaginaire.config.DEBUG = args.debug
+
     if not hasattr(cfg, 'inference_args'):
         cfg.inference_args = None
 
@@ -71,11 +75,10 @@ def main():
         # Download pretrained weights.
         pretrained_weight_url = cfg.pretrained_weight
         if pretrained_weight_url == '':
-            print('google link to the pretrained weight is not specified.')
+            print('link to the pretrained weight is not specified.')
             raise
-        default_checkpoint_path = args.config.replace('.yaml', '.pt')
-        args.checkpoint = get_checkpoint(
-            default_checkpoint_path, pretrained_weight_url)
+        default_checkpoint_path = args.config.split('.yaml')[0] + '-' + cfg.pretrained_weight + '.pt'
+        args.checkpoint = get_checkpoint(default_checkpoint_path, pretrained_weight_url)
         print('Checkpoint downloaded to', args.checkpoint)
 
     # Load checkpoint.

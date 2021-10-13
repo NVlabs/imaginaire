@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -114,9 +114,9 @@ class Trainer(vid2vidTrainer):
         data_t['prev_images'] = prev_images
         data_t['real_prev_image'] = data['images'][:, t - 1] if t > 0 else None
 
-        if 'landmarks_xy' in data:
-            data_t['landmarks_xy'] = data['landmarks_xy'][:, t]
-            data_t['ref_landmarks_xy'] = data['few_shot_landmarks_xy']
+        # if 'landmarks_xy' in data:
+        #     data_t['landmarks_xy'] = data['landmarks_xy'][:, t]
+        #     data_t['ref_landmarks_xy'] = data['few_shot_landmarks_xy']
         return data_t
 
     def post_process(self, data, net_G_output):
@@ -182,13 +182,13 @@ class Trainer(vid2vidTrainer):
             data (dict): Training data for current iteration.
         """
         self.net_G.eval()
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             self.net_G.module.averaged_model.eval()
 
         self.net_G_output = None
         with torch.no_grad():
             first_net_G_output, last_net_G_output, _ = self.gen_frames(data)
-            if self.cfg.trainer.model_average:
+            if self.cfg.trainer.model_average_config.enabled:
                 first_net_G_output_avg, last_net_G_output_avg, _ = \
                     self.gen_frames(data, use_model_average=True)
 
@@ -228,13 +228,13 @@ class Trainer(vid2vidTrainer):
 
         if is_master():
             vis_images_first = get_images(data, first_net_G_output)
-            if self.cfg.trainer.model_average:
+            if self.cfg.trainer.model_average_config.enabled:
                 vis_images_first += get_images(data, first_net_G_output_avg,
                                                for_model_average=True)
             if self.sequence_length > 1:
                 vis_images_last = get_images(data, last_net_G_output,
                                              return_first_frame=False)
-                if self.cfg.trainer.model_average:
+                if self.cfg.trainer.model_average_config.enabled:
                     vis_images_last += get_images(data, last_net_G_output_avg,
                                                   return_first_frame=False,
                                                   for_model_average=True)

@@ -8,9 +8,11 @@ max_iter: 150000
 logging_iter: 50
 trainer:
     type: imaginaire.trainers.funit
-    model_average: True
-    model_average_beta: 0.999
-    amp: O1
+    model_average_config:
+        enabled: True
+        beta: 0.999
+    amp_config:
+        enabled: True
     gan_mode: hinge
     loss_weight:
         gan: 1
@@ -74,8 +76,6 @@ data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
             # If not specified, is None by default.
             pre_aug_ops: None
@@ -87,8 +87,6 @@ data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
             # If not specified, is None by default.
             pre_aug_ops: None
@@ -142,8 +140,6 @@ test_data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
             # If not specified, is None by default.
             pre_aug_ops: None
@@ -155,8 +151,6 @@ test_data:
             # If not specified, is None by default.
             num_channels: 3
             # If not specified, is None by default.
-            interpolator: BILINEAR
-            # If not specified, is False by default.
             normalize: True
             # If not specified, is None by default.
             pre_aug_ops: None

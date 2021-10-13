@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -9,7 +9,8 @@ import numpy as np
 import torch.utils.data as data
 from PIL import Image
 
-from imaginaire.utils.data import IMG_EXTENSIONS
+from imaginaire.utils.data import IMG_EXTENSIONS, HDR_IMG_EXTENSIONS
+import imageio
 
 
 class FolderDataset(data.Dataset):
@@ -37,6 +38,8 @@ class FolderDataset(data.Dataset):
         """
         # Figure out decoding params.
         ext = self.extensions[data_type]
+        is_image = False
+        is_hdr = False
         if ext in IMG_EXTENSIONS:
             is_image = True
             if 'tif' in ext:
@@ -46,6 +49,8 @@ class FolderDataset(data.Dataset):
                 dtype, mode = np.uint8, 3
             else:
                 dtype, mode = np.uint8, -1
+        elif ext in HDR_IMG_EXTENSIONS:
+            is_hdr = True
         else:
             is_image = False
 
@@ -66,6 +71,13 @@ class FolderDataset(data.Dataset):
                 img = img[:, :, ::-1]
             img = Image.fromarray(img)
             return img
+        elif is_hdr:
+            try:
+                imageio.plugins.freeimage.download()
+                img = imageio.imread(buf)
+            except Exception:
+                print(path)
+            return img  # Return a numpy array
         else:
             return buf
 

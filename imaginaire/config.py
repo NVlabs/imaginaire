@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -11,6 +11,9 @@ import re
 
 import yaml
 from imaginaire.utils.distributed import master_only_print as print
+
+DEBUG = False
+USE_JIT = False
 
 
 class AttrDict(dict):
@@ -76,11 +79,14 @@ class Config(AttrDict):
 
     def __init__(self, filename=None, verbose=False):
         super(Config, self).__init__()
+        self.source_filename = filename
         # Set default parameters.
         # Logging.
         large_number = 1000000000
         self.snapshot_save_iter = large_number
         self.snapshot_save_epoch = large_number
+        self.metrics_iter = None
+        self.metrics_epoch = None
         self.snapshot_save_start_iter = 0
         self.snapshot_save_start_epoch = 0
         self.image_save_iter = large_number
@@ -88,21 +94,41 @@ class Config(AttrDict):
         self.max_epoch = large_number
         self.max_iter = large_number
         self.logging_iter = 100
+        self.speed_benchmark = False
 
         # Trainer.
         self.trainer = AttrDict(
-            model_average=False,
-            model_average_beta=0.9999,
-            model_average_start_iteration=1000,
-            model_average_batch_norm_estimation_iteration=30,
-            model_average_remove_sn=True,
+            model_average_config=AttrDict(enabled=False,
+                                          beta=0.9999,
+                                          start_iteration=1000,
+                                          num_batch_norm_estimation_iterations=30,
+                                          remove_sn=True),
+            # model_average=False,
+            # model_average_beta=0.9999,
+            # model_average_start_iteration=1000,
+            # model_average_batch_norm_estimation_iteration=30,
+            # model_average_remove_sn=True,
             image_to_tensorboard=False,
             hparam_to_tensorboard=False,
             distributed_data_parallel='pytorch',
+            distributed_data_parallel_params=AttrDict(
+                find_unused_parameters=False),
             delay_allreduce=True,
             gan_relativistic=False,
             gen_step=1,
-            dis_step=1)
+            dis_step=1,
+            gan_decay_k=1.,
+            gan_min_k=1.,
+            gan_separate_topk=False,
+            aug_policy='',
+            channels_last=False,
+            strict_resume=True,
+            amp_gp=False,
+            amp_config=AttrDict(init_scale=65536.0,
+                                growth_factor=2.0,
+                                backoff_factor=0.5,
+                                growth_interval=2000,
+                                enabled=False))
 
         # Networks.
         self.gen = AttrDict(type='imaginaire.generators.dummy')
@@ -110,7 +136,7 @@ class Config(AttrDict):
 
         # Optimizers.
         self.gen_opt = AttrDict(type='adam',
-                                fused_opt=True,
+                                fused_opt=False,
                                 lr=0.0001,
                                 adam_beta1=0.0,
                                 adam_beta2=0.999,
@@ -120,7 +146,7 @@ class Config(AttrDict):
                                                    step_size=large_number,
                                                    gamma=1))
         self.dis_opt = AttrDict(type='adam',
-                                fused_opt=True,
+                                fused_opt=False,
                                 lr=0.0001,
                                 adam_beta1=0.0,
                                 adam_beta2=0.999,

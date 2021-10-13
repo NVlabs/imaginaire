@@ -5,11 +5,13 @@ logging_iter: 100
 trainer:
     distributed_data_parallel: apex
     type: imaginaire.trainers.spade
-    amp: O1
-    model_average: False
-    model_average_beta: 0.9999
-    model_average_start_iteration: 1000
-    model_average_batch_norm_estimation_iteration: 30
+    amp_config:
+        enabled: True
+    model_average_config:
+        enabled: False
+        beta: 0.9999
+        start_iteration: 1000
+        num_batch_norm_estimation_iterations: 30
 
     fid_type: image
     gan_mode: hinge
@@ -87,20 +89,23 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
         - seg_maps:
             ext: png
-            num_channels: 35
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
+            normalize: False
+
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: False
+    one_hot_num_classes:
+        seg_maps: 35
+    input_labels:
+        - seg_maps
 
     # Which lmdb contains the ground truth image.
     input_image:
         - images
-
-    # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - seg_maps
 
     # Train dataset details.
     train:

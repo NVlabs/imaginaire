@@ -1,15 +1,15 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
-import copy
 import random
 import tempfile
 from collections import OrderedDict
-
+import warnings
 import numpy as np
 import torch
-import torchvision.io as io
+# import torchvision.io as io
+import cv2
 from PIL import Image
 
 from imaginaire.datasets.base import BaseDataset
@@ -24,12 +24,12 @@ class Dataset(BaseDataset):
     """
 
     def __init__(self, cfg, is_inference=False, is_test=False):
+        self.paired = True
         super(Dataset, self).__init__(cfg, is_inference, is_test)
         self.is_video_dataset = True
-        if hasattr(cfg.data, 'first_last_only'):
-            self.first_last_only = cfg.data.first_last_only
-        else:
-            self.first_last_only = False
+        self.few_shot_K = 1
+        self.first_last_only = getattr(cfg.data, 'first_last_only', False)
+        self.sample_far_frames_more = getattr(cfg.data, 'sample_far_frames_more', False)
 
     def get_label_lengths(self):
         r"""Get num channels of all labels to be concated.
@@ -40,7 +40,14 @@ class Dataset(BaseDataset):
         """
         label_lengths = OrderedDict()
         for data_type in self.input_labels:
-            label_lengths[data_type] = self.num_channels[data_type]
+            data_cfg = self.cfgdata
+            if hasattr(data_cfg, 'one_hot_num_classes') and \
+                    data_type in data_cfg.one_hot_num_classes:
+                label_lengths[data_type] = data_cfg.one_hot_num_classes[data_type]
+                if getattr(data_cfg, 'use_dont_care', False):
+                    label_lengths[data_type] += 1
+            else:
+                label_lengths[data_type] = self.num_channels[data_type]
         return label_lengths
 
     def num_inference_sequences(self):
@@ -114,7 +121,7 @@ class Dataset(BaseDataset):
             keys.append('%s/%s' % (sequence_name, filename))
         return keys
 
-    def _getitem(self, index, concat=True):
+    def _getitem(self, index):
         r"""Gets selected files.
 
         Args:
@@ -142,19 +149,37 @@ class Dataset(BaseDataset):
         data = self.load_from_dataset(keys, lmdbs)
 
         # Get frames from video.
-        temp = tempfile.NamedTemporaryFile()
-        temp.write(data['videos'][0])
-        temp.seek(0)
-
         try:
-            frames, _, info = io.read_video(temp)
+            temp = tempfile.NamedTemporaryFile()
+            temp.write(data['videos'][0])
+            temp.seek(0)
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # frames, _, info = io.read_video(temp)
+                # num_frames = frames.size(0)
+                cap = cv2.VideoCapture(temp.name)
+                num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if self.first_last_only:
-                chosen_idxs = [0, frames.size(0) - 1]
+                chosen_idxs = [0, num_frames - 1]
             else:
-                chosen_idxs = random.sample(range(frames.size(0)), 2)
+                # chosen_idxs = random.sample(range(frames.size(0)), 2)
+
+                chosen_idx = random.sample(range(num_frames), 1)[0]
+                few_shot_choose_range = list(range(chosen_idx)) + list(range(chosen_idx + 1, num_frames))
+                if self.sample_far_frames_more:
+                    choose_weight = list(reversed(range(chosen_idx))) + list(range(num_frames - chosen_idx - 1))
+                    few_shot_idx = random.choices(few_shot_choose_range, choose_weight, k=self.few_shot_K)
+                else:
+                    few_shot_idx = random.sample(few_shot_choose_range, k=self.few_shot_K)
+                chosen_idxs = few_shot_idx + [chosen_idx]
+
             chosen_images = []
             for idx in chosen_idxs:
-                chosen_images.append(Image.fromarray(frames[idx].numpy()))
+                # chosen_images.append(Image.fromarray(frames[idx].numpy()))
+                cap.set(1, idx)
+                _, frame = cap.read()
+                chosen_images.append(Image.fromarray(frame[:, :, ::-1]))
         except Exception:
             print('Issue with file:', sequence_name, filenames)
             blank = np.zeros((512, 512, 3), dtype=np.uint8)
@@ -166,13 +191,11 @@ class Dataset(BaseDataset):
         data = self.apply_ops(data, self.pre_aug_ops)
 
         # Do augmentations for images.
-        data, is_flipped = self.perform_augmentation(data, paired=True)
-
-        # Create copy of keypoint data types before post aug.
-        kp_data = {}
-        for data_type in self.keypoint_data_types:
-            new_key = data_type + '_xy'
-            kp_data[new_key] = copy.deepcopy(data[data_type])
+        data, is_flipped = self.perform_augmentation(
+            data, paired=True, augment_ops=self.augmentor.augment_ops)
+        # Individual video frame augmentation is used in face-vid2vid.
+        data = self.perform_individual_video_frame(
+            data, self.augmentor.individual_video_frame_augmentation_ops)
 
         # Apply ops post augmentation.
         data = self.apply_ops(data, self.post_aug_ops)
@@ -180,24 +203,11 @@ class Dataset(BaseDataset):
         # Convert images to tensor.
         data = self.to_tensor(data)
 
-        # Do one-hot encoding of required image labels.
-        data = self.make_one_hot(data)
-
         # Pack the sequence of images.
         for data_type in self.image_data_types:
             for idx in range(len(data[data_type])):
                 data[data_type][idx] = data[data_type][idx].unsqueeze(0)
             data[data_type] = torch.cat(data[data_type], dim=0)
-
-        # Package output.
-        if concat and self.input_labels:
-            labels = []
-            for data_type in self.input_labels:
-                label = data.pop(data_type)
-                labels.append(label)
-            data['label'] = torch.cat(labels, dim=1)
-            if not self.is_video_dataset:
-                data['label'] = data['label'].squeeze(0)
 
         if not self.is_video_dataset:
             # Remove any extra dimensions.
@@ -205,12 +215,9 @@ class Dataset(BaseDataset):
                 if data_type in data:
                     data[data_type] = data[data_type].squeeze(0)
 
-        # Add keypoint xy to data.
-        data.update(kp_data)
-
         # Prepare output.
-        data['driving_images'] = data['videos'][0]
-        data['source_images'] = data['videos'][1]
+        data['driving_images'] = data['videos'][self.few_shot_K:]
+        data['source_images'] = data['videos'][:self.few_shot_K]
         data.pop('videos')
         data['is_flipped'] = is_flipped
         data['key'] = keys
@@ -223,4 +230,4 @@ class Dataset(BaseDataset):
         return data
 
     def __getitem__(self, index):
-        return self._getitem(index, concat=True)
+        return self._getitem(index)

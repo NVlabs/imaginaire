@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -16,13 +16,18 @@ import numpy as np
 import torch
 import torch.utils.data as data
 import torchvision.transforms as transforms
-from PIL import Image
 
 from imaginaire.datasets.folder import FolderDataset
-from imaginaire.datasets.lmdb import IMG_EXTENSIONS, LMDBDataset
+from imaginaire.datasets.lmdb import \
+    IMG_EXTENSIONS, HDR_IMG_EXTENSIONS, LMDBDataset
+from imaginaire.datasets.object_store import ObjectStoreDataset
 from imaginaire.utils.data import \
-    (VIDEO_EXTENSIONS, Augmentor, load_from_folder, load_from_lmdb)
+    (VIDEO_EXTENSIONS, Augmentor,
+     load_from_folder, load_from_lmdb, load_from_object_store)
 from imaginaire.utils.lmdb import create_metadata
+
+
+DATASET_TYPES = ['lmdb', 'folder', 'object_store']
 
 
 class BaseDataset(data.Dataset):
@@ -51,14 +56,33 @@ class BaseDataset(data.Dataset):
                 data_info = self.cfgdata.train
         self.name = self.cfgdata.name
         self.lmdb_roots = data_info.roots
-        self.dataset_is_lmdb = getattr(data_info, 'is_lmdb', True)
-        if not self.dataset_is_lmdb:
-            assert hasattr(self.cfgdata, 'paired')
+        self.dataset_type = getattr(data_info, 'dataset_type', None)
+        self.cache = getattr(self.cfgdata, 'cache', None)
+        self.interpolator = getattr(self.cfgdata, 'interpolator', "INTER_LINEAR")
 
-        if self.dataset_is_lmdb:
+        # Get AWS secret keys.
+        if self.dataset_type == 'object_store':
+            assert hasattr(cfg, 'aws_credentials_file')
+            self.aws_credentials_file = cfg.aws_credentials_file
+
+        # Legacy lmdb/folder only support.
+        if self.dataset_type is None:
+            self.dataset_is_lmdb = getattr(data_info, 'is_lmdb', False)
+            if self.dataset_is_lmdb:
+                self.dataset_type = 'lmdb'
+            else:
+                self.dataset_type = 'folder'
+        # Legacy support ends.
+
+        assert self.dataset_type in DATASET_TYPES
+        if self.dataset_type == 'lmdb':
             # Add handle to function to load data from LMDB.
             self.load_from_dataset = load_from_lmdb
-        else:
+        elif self.dataset_type == 'folder':
+            # For some unpaired experiments, we would like the dataset to be presented in a paired way
+
+            if hasattr(self.cfgdata, 'paired') is False:
+                self.cfgdata.paired = self.paired
             # Add handle to function to load data from folder.
             self.load_from_dataset = load_from_folder
             # Create metadata for folders.
@@ -74,18 +98,21 @@ class BaseDataset(data.Dataset):
                 all_metadata.append(metadata)
             if self.is_test:
                 cfg.data = cfg.data_backup
+        elif self.dataset_type == 'object_store':
+            # Add handle to function to load data from AWS S3.
+            self.load_from_dataset = load_from_object_store
 
         # Get the types of data stored in dataset, and their extensions.
         self.data_types = []  # Names of data types.
         self.dataset_data_types = []  # These data types are in the dataset.
         self.image_data_types = []  # These types are images.
+        self.hdr_image_data_types = []  # These types are HDR images.
         self.normalize = {}  # Does this data type need normalization?
         self.extensions = {}  # What is this data type's file extension.
-        self.interpolators = {}  # Which interpolator to use?
+        self.is_mask = {}  # Whether this data type is discrete masks?
         self.num_channels = {}  # How many channels does this data type have?
         self.pre_aug_ops = {}  # Ops on data type before augmentation.
         self.post_aug_ops = {}  # Ops on data type after augmentation.
-        self.use_dont_care = {}  # Use dont care label for this label?
 
         # Extract info from data types.
         for data_type in self.cfgdata.input_types:
@@ -98,14 +125,12 @@ class BaseDataset(data.Dataset):
                 info['ext'] = None
             if 'normalize' not in info:
                 info['normalize'] = False
-            if 'interpolator' not in info:
-                info['interpolator'] = None
+            if 'is_mask' not in info:
+                info['is_mask'] = False
             if 'pre_aug_ops' not in info:
                 info['pre_aug_ops'] = 'None'
             if 'post_aug_ops' not in info:
                 info['post_aug_ops'] = 'None'
-            if 'use_dont_care' not in info:
-                info['use_dont_care'] = False
             if 'computed_on_the_fly' not in info:
                 info['computed_on_the_fly'] = False
             if 'num_channels' not in info:
@@ -122,19 +147,14 @@ class BaseDataset(data.Dataset):
                                       info['pre_aug_ops'].split(',')]
             self.post_aug_ops[name] = [op.strip() for op in
                                        info['post_aug_ops'].split(',')]
-            self.use_dont_care[name] = info['use_dont_care']
-            self.interpolators[name] = None
-            if info['ext'] is not None and \
-                    (info['ext'] in IMG_EXTENSIONS or
-                        info['ext'] in VIDEO_EXTENSIONS):
+            self.is_mask[name] = info['is_mask']
+            if info['ext'] is not None and (info['ext'] in IMG_EXTENSIONS or info['ext'] in VIDEO_EXTENSIONS):
                 self.image_data_types.append(name)
-                self.interpolators[name] = getattr(
-                    Image, info['interpolator'])
+            if info['ext'] is not None and info['ext'] in HDR_IMG_EXTENSIONS:
+                self.hdr_image_data_types.append(name)
 
         # Add some info into cfgdata for legacy support.
         self.cfgdata.data_types = self.data_types
-        self.cfgdata.use_dont_care = [self.use_dont_care[name]
-                                      for name in self.data_types]
         self.cfgdata.num_channels = [self.num_channels[name]
                                      for name in self.data_types]
 
@@ -159,16 +179,11 @@ class BaseDataset(data.Dataset):
             self.keypoint_data_types = self.cfgdata.keypoint_data_types
 
         # Create augmentation operations.
-        if is_test:
-            aug_list = self.cfgdata.test.augmentations
-        else:
-            if is_inference:
-                aug_list = self.cfgdata.val.augmentations
-            else:
-                aug_list = self.cfgdata.train.augmentations
+        aug_list = data_info.augmentations
+        individual_video_frame_aug_list = getattr(data_info, 'individual_video_frame_augmentations', dict())
         self.augmentor = Augmentor(
-            aug_list, self.image_data_types, self.interpolators,
-            self.keypoint_data_types)
+            aug_list, individual_video_frame_aug_list, self.image_data_types, self.is_mask,
+            self.keypoint_data_types, self.interpolator)
         self.augmentable_types = self.image_data_types + \
             self.keypoint_data_types
 
@@ -176,7 +191,14 @@ class BaseDataset(data.Dataset):
         self.transform = {}
         for data_type in self.image_data_types:
             normalize = self.normalize[data_type]
-            self.transform[data_type] = self._get_transform(normalize)
+            self.transform[data_type] = self._get_transform(
+                normalize, self.num_channels[data_type])
+
+        # Create torch transformations for HDR images.
+        for data_type in self.hdr_image_data_types:
+            normalize = self.normalize[data_type]
+            self.transform[data_type] = self._get_transform(
+                normalize, self.num_channels[data_type])
 
         # Initialize handles.
         self.sequence_lists = []  # List of sequences per dataset root.
@@ -188,11 +210,14 @@ class BaseDataset(data.Dataset):
 
         # Load each dataset.
         for idx, root in enumerate(self.lmdb_roots):
-            if self.dataset_is_lmdb:
+            if self.dataset_type == 'lmdb':
                 self._add_dataset(root)
-            else:
+            elif self.dataset_type == 'folder':
                 self._add_dataset(root, filenames=all_filenames[idx],
                                   metadata=all_metadata[idx])
+            elif self.dataset_type == 'object_store':
+                self._add_dataset(
+                    root, aws_credentials_file=self.aws_credentials_file)
 
         # Compute dataset statistics and create whatever self.variables required
         # for the specific dataloader.
@@ -220,7 +245,7 @@ class BaseDataset(data.Dataset):
         r"""Entry function for dataset."""
         raise NotImplementedError
 
-    def _get_transform(self, normalize):
+    def _get_transform(self, normalize, num_channels):
         r"""Convert numpy to torch tensor.
 
         Args:
@@ -232,78 +257,93 @@ class BaseDataset(data.Dataset):
         transform_list = [transforms.ToTensor()]
         if normalize:
             transform_list.append(
-                transforms.Normalize((0.5, 0.5, 0.5),
-                                     (0.5, 0.5, 0.5)))
+                transforms.Normalize((0.5, ) * num_channels,
+                                     (0.5, ) * num_channels, inplace=True))
         return transforms.Compose(transform_list)
 
-    def _add_dataset(self, root, filenames=None, metadata=None):
+    def _add_dataset(self, root, filenames=None, metadata=None,
+                     aws_credentials_file=None):
         r"""Adds an LMDB dataset to a list of datasets.
 
         Args:
             root (str): Path to LMDB or folder dataset.
             filenames: List of filenames for folder dataset.
             metadata: Metadata for folder dataset.
+            aws_credentials_file: Path to file containing AWS credentials.
         """
-        # Get sequences associated with this dataset.
-        if filenames is None:
-            list_path = 'all_filenames.json'
-            with open(os.path.join(root, list_path)) as fin:
-                sequence_list = OrderedDict(json.load(fin))
+        if aws_credentials_file and self.dataset_type == 'object_store':
+            object_store_dataset = ObjectStoreDataset(
+                root, aws_credentials_file, cache=self.cache)
+            sequence_list = object_store_dataset.sequence_list
         else:
-            sequence_list = filenames
-        self.sequence_lists.append(sequence_list)
+            # Get sequences associated with this dataset.
+            if filenames is None:
+                list_path = 'all_filenames.json'
+                with open(os.path.join(root, list_path)) as fin:
+                    sequence_list = OrderedDict(json.load(fin))
+            else:
+                sequence_list = filenames
 
-        additional_path = 'all_indices.json'
-        if os.path.exists(os.path.join(root, additional_path)):
-            print('Using additional list for object indices.')
-            with open(os.path.join(root, additional_path)) as fin:
-                additional_list = OrderedDict(json.load(fin))
-            self.additional_lists.append(additional_list)
+            additional_path = 'all_indices.json'
+            if os.path.exists(os.path.join(root, additional_path)):
+                print('Using additional list for object indices.')
+                with open(os.path.join(root, additional_path)) as fin:
+                    additional_list = OrderedDict(json.load(fin))
+                self.additional_lists.append(additional_list)
+        self.sequence_lists.append(sequence_list)
 
         # Get LMDB dataset handles.
         for data_type in self.dataset_data_types:
-            if self.dataset_is_lmdb:
+            if self.dataset_type == 'lmdb':
                 self.lmdbs[data_type].append(
                     LMDBDataset(os.path.join(root, data_type)))
-            else:
+            elif self.dataset_type == 'folder':
                 self.lmdbs[data_type].append(
                     FolderDataset(os.path.join(root, data_type), metadata))
+            elif self.dataset_type == 'object_store':
+                # All data types use the same handle.
+                self.lmdbs[data_type].append(object_store_dataset)
 
-    def _encode_onehot(self, label_map, num_labels, use_dont_care):
-        r"""Make input one-hot.
+    def perform_individual_video_frame(self, data, augment_ops):
+        r"""Perform data augmentation on images only.
 
         Args:
-            label_map (torch.Tensor): (C, H, W) tensor containing indices.
-            num_labels (int): Number of labels to expand tensor to.
-            use_dont_care (bool): Use the dont care label or not?
+            data (dict): Keys are from data types. Values can be numpy.ndarray
+                or list of numpy.ndarray (image or list of images).
+            augment_ops (list): The augmentation operations for individual frames.
         Returns:
-            output (torch.Tensor): (num_labels, H, W) one-hot tensor.
+            (tuple):
+              - data (dict): Augmented data, with same keys as input data.
+              - is_flipped (bool): Flag which tells if images have been
+                left-right flipped.
         """
-        # All labels lie in [0. num_label - 1].
-        # Encode dont care as num_label.
-        label_map[label_map < 0] = num_labels
-        label_map[label_map >= num_labels] = num_labels
+        if augment_ops:
+            all_data = dict()
+            for ix, key in enumerate(data.keys()):
+                if ix == 0:
+                    num = len(data[key])
+                    for j in range(num):
+                        all_data['%d' % j] = dict()
+                for j in range(num):
+                    all_data['%d' % j][key] = data[key][j:(j+1)]
+            for j in range(num):
+                all_data['%d' % j], _ = self.perform_augmentation(
+                    all_data['%d' % j], paired=True, augment_ops=augment_ops)
+            for key in data.keys():
+                tmp = []
+                for j in range(num):
+                    tmp += all_data['%d' % j][key]
+                data[key] = tmp
+        return data
 
-        size = label_map.size()
-        output_size = (num_labels + 1, size[1], size[2])
-        output = torch.zeros(*output_size)
-        output = output.scatter_(0, label_map.data.long(), 1.0)
-
-        if not use_dont_care:
-            # Size of output is (num_labels + 1, H, W).
-            # Last label is for dont care segmentation index.
-            # Only select first num_labels channels.
-            output = output[:num_labels, ...]
-
-        return output
-
-    def perform_augmentation(self, data, paired):
+    def perform_augmentation(self, data, paired, augment_ops=None):
         r"""Perform data augmentation on images only.
 
         Args:
             data (dict): Keys are from data types. Values can be numpy.ndarray
                 or list of numpy.ndarray (image or list of images).
             paired (bool): Apply same augmentation to all input keys?
+            augment_ops (list): The augmentation operations.
         Returns:
             (tuple):
               - data (dict): Augmented data, with same keys as input data.
@@ -315,12 +355,31 @@ class BaseDataset(data.Dataset):
             aug_inputs[data_type] = data[data_type]
 
         augmented, is_flipped = self.augmentor.perform_augmentation(
-            aug_inputs, paired=paired)
+            aug_inputs, paired=paired, augment_ops=augment_ops)
 
         for data_type in self.augmentable_types:
             data[data_type] = augmented[data_type]
 
         return data, is_flipped
+
+    def flip_hdr(self, data, is_flipped=False):
+        r"""Flip hdr images.
+
+        Args:
+            data (dict): Keys are from data types. Values can be numpy.ndarray
+                or list of numpy.ndarray (image or list of images).
+            is_flipped (bool): Applying left-right flip to the hdr images
+        Returns:
+            (tuple):
+              - data (dict): Augmented data, with same keys as input data.
+        """
+        if is_flipped is False:
+            return data
+
+        for data_type in self.hdr_image_data_types:
+            # print('Length of data: {}'.format(len(data[data_type])))
+            data[data_type][0] = data[data_type][0][:, ::-1, :].copy()
+        return data
 
     def to_tensor(self, data):
         r"""Convert all images to tensor.
@@ -339,46 +398,10 @@ class BaseDataset(data.Dataset):
                         np.float32)
                 data[data_type][idx] = self.transform[data_type](
                     data[data_type][idx])
-        return data
-
-    def make_one_hot(self, data):
-        r"""Convert appropriate image data types to one-hot representation.
-
-        Args:
-            data (dict): Dict containing data_type as key, with each value
-                as a list of torch.Tensors.
-        Returns:
-            data (dict): same as input data, but with one-hot for selected
-            types.
-        """
-        for data_type in self.image_data_types:
-            expected_num_channels = self.num_channels[data_type]
-            num_channels = data[data_type][0].size(0)
-            interpolation_method = self.interpolators[data_type]
-            if num_channels < expected_num_channels:
-                if num_channels != 1:
-                    raise ValueError(
-                        'Num channels: %d. ' % (num_channels) +
-                        'One-hot expansion can only be done if ' +
-                        'image has 1 channel')
-                assert interpolation_method == Image.NEAREST, \
-                    'Cant do one-hot on image which has been resized' + \
-                    'with BILINEAR.'
-
-                if data_type in self.use_dont_care:
-                    use_dont_care = self.use_dont_care[data_type]
-                else:
-                    use_dont_care = False
-
-                for idx in range(len(data[data_type])):
-                    data[data_type][idx] = self._encode_onehot(
-                        data[data_type][idx] * 255.0, expected_num_channels,
-                        use_dont_care)
-            elif num_channels > expected_num_channels:
-                raise ValueError(
-                    'Data type: ' + data_type + ', ' +
-                    'Num channels %d > Expected num channels %d' % (
-                        num_channels, expected_num_channels))
+        for data_type in self.hdr_image_data_types:
+            for idx in range(len(data[data_type])):
+                data[data_type][idx] = self.transform[data_type](
+                    data[data_type][idx])
         return data
 
     def apply_ops(self, data, op_dict, full_data=False):
@@ -420,8 +443,9 @@ class BaseDataset(data.Dataset):
                         if data_type not in self.image_data_types:
                             self.image_data_types.append(data_type)
                             normalize = self.normalize[data_type]
+                            num_channels = self.num_channels[data_type]
                             self.transform[data_type] = \
-                                self._get_transform(normalize)
+                                self._get_transform(normalize, num_channels)
                     elif op_type == 'convert':
                         continue
                     elif op_type is None:
@@ -458,6 +482,12 @@ class BaseDataset(data.Dataset):
             assert isinstance(data, list)
             return np.array(data)
 
+        def l2_normalize(data):
+            r"""L2 normalization."""
+            assert isinstance(data, torch.Tensor)
+            import torch.nn.functional as F
+            return F.normalize(data, dim=1)
+
         if op == 'to_tensor':
             return list_to_tensor, None
         elif op == 'decode_json':
@@ -466,6 +496,8 @@ class BaseDataset(data.Dataset):
             return decode_pkl_list, None
         elif op == 'to_numpy':
             return list_to_numpy, None
+        elif op == 'l2_norm':
+            return l2_normalize, None
         elif '::' in op:
             parts = op.split('::')
             if len(parts) == 2:
@@ -473,18 +505,43 @@ class BaseDataset(data.Dataset):
                 module = importlib.import_module(module)
                 function = getattr(module, function)
                 sig = signature(function)
-                assert len(sig.parameters) == 3, \
-                    'Full data functions take in (cfgdata, full_data, ' \
-                    'is_inference) as input.'
-                function = partial(function, self.cfgdata, self.is_inference)
+                num_params = len(sig.parameters)
+                assert num_params in [3, 4], \
+                    'Full data functions take in (cfgdata, is_inference, ' \
+                    'full_data) or (cfgdata, is_inference, self, full_data) ' \
+                    'as input.'
+                if num_params == 3:
+                    function = partial(
+                        function, self.cfgdata, self.is_inference)
+                elif num_params == 4:
+                    function = partial(
+                        function, self.cfgdata, self.is_inference, self)
                 function_type = 'full_data'
             elif len(parts) == 3:
                 function_type, module, function = parts
                 module = importlib.import_module(module)
+
+                # Get function inputs, if provided.
+                partial_fn = False
+                if '(' in function and ')' in function:
+                    partial_fn = True
+                    function, params = self._get_fn_params(function)
+
                 function = getattr(module, function)
+
+                # Create partial function.
+                if partial_fn:
+                    function = partial(function, **params)
+
+                # Get function signature.
                 sig = signature(function)
+                num_params = 0
+                for param in sig.parameters.values():
+                    if param.kind == param.POSITIONAL_OR_KEYWORD:
+                        num_params += 1
+
                 if function_type == 'vis':
-                    if len(sig.parameters) != 9:
+                    if num_params != 9:
                         raise ValueError(
                             'vis function type needs to take ' +
                             '(resize_h, resize_w, crop_h, crop_w, ' +
@@ -500,7 +557,7 @@ class BaseDataset(data.Dataset):
                                        self.augmentor.is_flipped,
                                        self.cfgdata)
                 elif function_type == 'convert':
-                    if len(sig.parameters) != 1:
+                    if num_params != 1:
                         raise ValueError(
                             'convert function type needs to take ' +
                             '(data) as input.')
@@ -511,6 +568,29 @@ class BaseDataset(data.Dataset):
             return function, function_type
         else:
             raise ValueError('Unknown op: %s' % (op))
+
+    def _get_fn_params(self, function_string):
+        r"""Find key-value inputs to function from string definition.
+
+        Args:
+            function_string (str): String with function name and args. e.g.
+            my_function(a=10, b=20).
+        Returns:
+            function (str): Name of function.
+            params (dict): Key-value params for function.
+        """
+        start = function_string.find('(')
+        end = function_string.find(')')
+        function = function_string[:start]
+        params_str = function_string[start+1:end]
+        params = {}
+        for item in params_str.split(':'):
+            key, value = item.split('=')
+            try:
+                params[key] = float(value)
+            except:  # noqa
+                params[key] = value
+        return function, params
 
     def __len__(self):
         return self.epoch_length

@@ -1,6 +1,7 @@
 # flake8: noqa
 from torch.nn.modules.module import Module
 from torch.autograd import Function, Variable
+from torch.cuda.amp import autocast
 import resample2d_cuda
 
 
@@ -51,7 +52,9 @@ class Resample2d(Module):
         self.kernel_size = kernel_size
         self.bilinear = bilinear
 
+    @autocast(False)
     def forward(self, input1, input2):
+        input1, input2 = input1.float(), input2.float()
         input1_c = input1.contiguous()
         # return Resample2dFunction.apply(
         #     input1_c, input2, self.kernel_size, self.bilinear)

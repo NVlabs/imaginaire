@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -45,22 +45,34 @@ def save_intermediate_training_results(
     torchvision.utils.save_image(image_grid, output_filename, nrow=1)
 
 
-def download_file_from_google_drive(file_id, destination):
-    r"""Download a file from the google drive by using the file ID.
+def download_file_from_google_drive(URL, destination):
+    r"""Download a file from google drive.
 
     Args:
-        file_id: Google drive file ID
+        URL: GDrive file ID.
         destination: Path to save the file.
 
     Returns:
 
     """
-    URL = "https://docs.google.com/uc?export=download"
+    download_file(f"https://docs.google.com/uc?export=download&id={URL}", destination)
+
+
+def download_file(URL, destination):
+    r"""Download a file from google drive or pbss by using the url.
+
+    Args:
+        URL: GDrive URL or PBSS pre-signed URL for the checkpoint.
+        destination: Path to save the file.
+
+    Returns:
+
+    """
     session = requests.Session()
-    response = session.get(URL, params={'id': file_id}, stream=True)
+    response = session.get(URL, stream=True)
     token = get_confirm_token(response)
     if token:
-        params = {'id': file_id, 'confirm': token}
+        params = {'confirm': token}
         response = session.get(URL, params=params, stream=True)
     save_response_content(response, destination)
 
@@ -115,8 +127,10 @@ def get_checkpoint(checkpoint_path, url=''):
     if not os.path.exists(full_checkpoint_path):
         os.makedirs(os.path.dirname(full_checkpoint_path), exist_ok=True)
         if is_master():
-            print('Download {}'.format(url))
-            download_file_from_google_drive(url, full_checkpoint_path)
+            print('Downloading {}'.format(url))
+            if 'pbss.s8k.io' not in url:
+                url = f"https://docs.google.com/uc?export=download&id={url}"
+            download_file(url, full_checkpoint_path)
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
     return full_checkpoint_path

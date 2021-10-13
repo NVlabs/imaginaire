@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -8,7 +8,6 @@ from torch import nn
 from imaginaire.evaluation import compute_fid
 from imaginaire.losses import GANLoss, PerceptualLoss  # GaussianKLLoss
 from imaginaire.trainers.base import BaseTrainer
-from imaginaire.utils.meters import Meter
 
 
 class Trainer(BaseTrainer):
@@ -34,23 +33,6 @@ class Trainer(BaseTrainer):
         self.best_fid_a = None
         self.best_fid_b = None
 
-    def _init_tensorboard(self):
-        r"""Initialize the tensorboard."""
-        # Logging frequency: self.cfg.logging_iter
-        self.meters = {}
-        names = ['optim/gen_lr', 'optim/dis_lr', 'time/iteration', 'time/epoch']
-        for name in names:
-            self.meters[name] = Meter(name)
-
-        # Logging frequency: self.cfg.snapshot_save_iter
-        names = ['FID_a', 'best_FID_a', 'FID_b', 'best_FID_b']
-        self.metric_meters = {}
-        for name in names:
-            self.metric_meters[name] = Meter(name)
-
-        # Logging frequency: self.cfg.image_display_iter
-        self.image_meter = Meter('images')
-
     def _init_loss(self, cfg):
         r"""Initialize loss terms. In UNIT, we have several loss terms
         including the GAN loss, the image reconstruction loss, the cycle
@@ -67,8 +49,7 @@ class Trainer(BaseTrainer):
         self.criteria['cycle_recon'] = nn.L1Loss()
         if getattr(cfg.trainer.loss_weight, 'perceptual', 0) > 0:
             self.criteria['perceptual'] = \
-                PerceptualLoss(cfg=cfg,
-                               network=cfg.trainer.perceptual_mode,
+                PerceptualLoss(network=cfg.trainer.perceptual_mode,
                                layers=cfg.trainer.perceptual_layers)
 
         for loss_name, loss_weight in cfg.trainer.loss_weight.__dict__.items():
@@ -175,7 +156,7 @@ class Trainer(BaseTrainer):
         Args:
             data (dict): The current batch.
         """
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G_for_evaluation = self.net_G.module.averaged_model
         else:
             net_G_for_evaluation = self.net_G
@@ -213,7 +194,7 @@ class Trainer(BaseTrainer):
         r"""Compute FID for both domains.
         """
         self.net_G.eval()
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G_for_evaluation = self.net_G.module.averaged_model
         else:
             net_G_for_evaluation = self.net_G

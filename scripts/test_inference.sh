@@ -10,85 +10,137 @@ function output {
   fi
 }
 
+LOG="/tmp/unit_test.log"
 
 rm projects/*/*.tar.gz
-rm projects/*/output -rf
 rm projects/*/test_data -rf
 
-
-python scripts/download_test_data.py --model_name coco_funit
+cmd="python scripts/download_test_data.py --model_name coco_funit"
 output
 
-python inference.py --single_gpu \
---config configs/projects/coco_funit/animal_faces/base64_bs8_class149.yaml \
---output_dir projects/coco_funit/output/animal_faces
+CONFIG=configs/projects/coco_funit/animal_faces/base64_bs8_class149.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/coco_funit/output/animal_faces"
+  output
+fi
+
+CONFIG=configs/projects/coco_funit/mammals/base64_bs8_class305.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/coco_funit/output/mammals"
+  output
+fi
+
+cmd="python ./scripts/download_test_data.py --model_name fs_vid2vid"
 output
 
-python inference.py --single_gpu \
---config configs/projects/coco_funit/mammals/base64_bs8_class305.yaml \
---output_dir projects/coco_funit/output/mammals
+CONFIG=configs/projects/fs_vid2vid/face_forensics/ampO1.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu --num_workers 0 \
+  --config $CONFIG \
+  --output_dir projects/fs_vid2vid/output/face_forensics"
+  output
+fi
+
+cmd="python scripts/download_test_data.py --model_name funit"
 output
 
-python ./scripts/download_test_data.py --model_name fs_vid2vid
+CONFIG=configs/projects/funit/animal_faces/base64_bs8_class149.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/funit/output/animal_faces"
+  output
+fi
+
+cmd="python scripts/download_test_data.py --model_name munit"
 output
 
-python inference.py --single_gpu --num_workers 0 \
---config configs/projects/fs_vid2vid/faceForensics/ampO1.yaml \
---output_dir projects/fs_vid2vid/output/faceForensics
+CONFIG=configs/projects/munit/afhq_dog2cat/ampO1.yaml
+if test -f "$CONFIG"; then
+  cmd="python -m torch.distributed.launch --nproc_per_node=1 inference.py \
+  --config $CONFIG \
+  --output_dir projects/munit/output/afhq_dog2cat"
+  output
+fi
+
+cmd="python scripts/download_test_data.py --model_name pix2pixhd"
 output
 
-python scripts/download_test_data.py --model_name funit
+CONFIG=configs/projects/pix2pixhd/cityscapes/ampO1.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/pix2pixhd/output/cityscapes"
+  output
+fi
+
+cmd="python scripts/download_test_data.py --model_name spade"
 output
 
-python inference.py --single_gpu \
---config configs/projects/funit/animal_faces/base64_bs8_class149.yaml \
---output_dir projects/funit/output/animal_faces
+CONFIG=configs/projects/spade/cocostuff/base128_bs4.yaml
+if test -f "$CONFIG"; then
+  cmd="python -m torch.distributed.launch --nproc_per_node=1 inference.py \
+  --config $CONFIG \
+  --output_dir projects/spade/output/cocostuff"
+  output
+fi
+
+cmd="python scripts/download_test_data.py --model_name unit"
 output
 
-python scripts/download_test_data.py --model_name munit
+CONFIG=configs/projects/unit/winter2summer/base48_bs1.yaml
+if test -f "$CONFIG"; then
+  cmd="python -m torch.distributed.launch --nproc_per_node=1 inference.py \
+  --config $CONFIG \
+  --output_dir projects/unit/output/winter2summer"
+  output
+fi
+
+cmd="python ./scripts/download_test_data.py --model_name vid2vid"
 output
 
-python -m torch.distributed.launch --nproc_per_node=1 inference.py \
---config configs/projects/munit/afhq_dog2cat/ampO1.yaml \
---output_dir projects/munit/output/afhq_dog2cat
+CONFIG=configs/projects/vid2vid/cityscapes/ampO1.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/vid2vid/output/cityscapes"
+  output
+fi
+
+cmd="python ./scripts/download_test_data.py --model_name \"wc_vid2vid/cityscapes\""
 output
 
-python scripts/download_test_data.py --model_name pix2pixhd
+CONFIG=configs/projects/wc_vid2vid/cityscapes/seg_ampO1.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/wc_vid2vid/output/cityscapes"
+  output
+fi
+
+cmd="python ./scripts/download_test_data.py --model_name \"wc_vid2vid/mannequin\""
 output
 
-python inference.py --single_gpu \
---config configs/projects/pix2pixhd/cityscapes/ampO1.yaml \
---output_dir projects/pix2pixhd/output/cityscapes
+CONFIG=configs/projects/wc_vid2vid/mannequin/hed_ampO0.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/wc_vid2vid/output/mannequin"
+  output
+fi
+
+
+cmd="python ./scripts/download_test_data.py --model_name gancraft"
 output
 
-python scripts/download_test_data.py --model_name spade
-output
-
-python -m torch.distributed.launch --nproc_per_node=1 inference.py \
---config configs/projects/spade/cocostuff/base128_bs4.yaml \
---output_dir projects/spade/output/cocostuff
-output
-
-python scripts/download_test_data.py --model_name unit
-output
-
-python -m torch.distributed.launch --nproc_per_node=1 inference.py \
---config configs/projects/unit/winter2summer/base48_bs1.yaml \
---output_dir projects/unit/output/winter2summer
-output
-
-python ./scripts/download_test_data.py --model_name vid2vid
-output
-
-python inference.py --single_gpu \
---config configs/projects/vid2vid/cityscapes/ampO1.yaml \
---output_dir projects/vid2vid/output/cityscapes
-output
-
-python ./scripts/download_test_data.py --model_name wc_vid2vid
-output
-
-python inference.py --single_gpu \
---config configs/projects/wc_vid2vid/cityscapes/seg_ampO1.yaml \
---output_dir projects/wc_vid2vid/output/cityscapes
-output
+CONFIG=configs/projects/gancraft/demoworld.yaml
+if test -f "$CONFIG"; then
+  cmd="python inference.py --single_gpu \
+  --config $CONFIG \
+  --output_dir projects/gancraft/output/demoworld"
+  output
+fi

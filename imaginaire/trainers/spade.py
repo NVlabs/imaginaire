@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -13,7 +13,6 @@ from imaginaire.losses import (FeatureMatchingLoss, GANLoss, GaussianKLLoss,
                                PerceptualLoss)
 from imaginaire.trainers.base import BaseTrainer
 from imaginaire.utils.distributed import master_only_print as print
-from imaginaire.utils.meters import Meter
 from imaginaire.utils.model_average import reset_batch_norm, \
     calibrate_batch_norm_momentum
 from imaginaire.utils.misc import split_labels, to_device
@@ -67,7 +66,6 @@ class Trainer(BaseTrainer):
         if hasattr(cfg.trainer, 'perceptual_loss'):
             self.criteria['Perceptual'] = \
                 PerceptualLoss(
-                    cfg=cfg,
                     network=cfg.trainer.perceptual_loss.mode,
                     layers=cfg.trainer.perceptual_loss.layers,
                     weights=cfg.trainer.perceptual_loss.weights)
@@ -80,20 +78,6 @@ class Trainer(BaseTrainer):
         self.criteria['GaussianKL'] = GaussianKLLoss()
         self.weights['GaussianKL'] = cfg.trainer.loss_weight.kl
 
-    def _init_tensorboard(self):
-        r"""Initialize the tensorboard. For the SPADE model, we will record
-        regular and FID, which is the average FID.
-        """
-        self.regular_fid_meter = Meter('FID/regular')
-        if self.cfg.trainer.model_average:
-            self.average_fid_meter = Meter('FID/average')
-        self.image_meter = Meter('images')
-        self.meters = {}
-        names = ['optim/gen_lr', 'optim/dis_lr',
-                 'time/iteration', 'time/epoch']
-        for name in names:
-            self.meters[name] = Meter(name)
-
     def _start_of_iteration(self, data, current_iteration):
         r"""Model specific custom start of iteration process. We will do two
         things. First, put all the data to GPU. Second, we will resize the
@@ -105,22 +89,6 @@ class Trainer(BaseTrainer):
             data (dict): The current batch.
             current_iteration (int): The iteration number of the current batch.
         """
-        if len(data['label'].size()) == 5:
-            label_image_raw = data['images'][:, 0:-1, :, :, :]
-            label_image = label_image_raw.reshape(
-                [label_image_raw.size(0),
-                 -1,
-                 label_image_raw.size(3),
-                 label_image_raw.size(4)])
-            images = data['images'][:, -1, :, :, :]
-            label_label = data['label'].reshape(
-                [data['label'].size(0),
-                 -1,
-                 data['label'].size(3),
-                 data['label'].size(4)])
-            label = torch.cat([label_label, label_image], 1)
-            data['label'] = label
-            data['images'] = images
         data = to_device(data, 'cuda')
         data = self._resize_data(data)
         return data
@@ -137,8 +105,7 @@ class Trainer(BaseTrainer):
         self._time_before_loss()
 
         output_fake = self._get_outputs(net_D_output, real=False)
-        self.gen_losses['GAN'] = \
-            self.criteria['GAN'](output_fake, True, dis_update=False)
+        self.gen_losses['GAN'] = self.criteria['GAN'](output_fake, True, dis_update=False)
 
         self.gen_losses['FeatureMatching'] = self.criteria['FeatureMatching'](
             net_D_output['fake_features'], net_D_output['real_features'])
@@ -193,37 +160,43 @@ class Trainer(BaseTrainer):
         Args:
             data (dict): The current batch.
         """
-        self.recalculate_model_average_batch_norm_statistics(
+        self.recalculate_batch_norm_statistics(
             self.train_data_loader)
         with torch.no_grad():
             label_lengths = self.train_data_loader.dataset.get_label_lengths()
             labels = split_labels(data['label'], label_lengths)
             # Get visualization of the segmentation mask.
-            segmap = tensor2label(labels['seg_maps'],
-                                  label_lengths['seg_maps'],
-                                  output_normalized_tensor=True)
-            segmap = torch.cat([x.unsqueeze(0) for x in segmap], 0)
+            vis_images = list()
+            vis_images.append(data['images'])
             net_G_output = self.net_G(data, random_style=True)
-            vis_images = [data['images'],
-                          segmap,
-                          net_G_output['fake_images']]
-            if self.cfg.trainer.model_average:
+            # print(labels.keys())
+            for key in labels.keys():
+                if 'seg' in key:
+                    segmaps = tensor2label(labels[key], label_lengths[key], output_normalized_tensor=True)
+                    segmaps = torch.cat([x.unsqueeze(0) for x in segmaps], 0)
+                    vis_images.append(segmaps)
+                if 'edge' in key:
+                    edgemaps = torch.cat((labels[key], labels[key], labels[key]), 1)
+                    vis_images.append(edgemaps)
+
+            vis_images.append(net_G_output['fake_images'])
+            if self.cfg.trainer.model_average_config.enabled:
                 net_G_model_average_output = \
                     self.net_G.module.averaged_model(data, random_style=True)
                 vis_images.append(net_G_model_average_output['fake_images'])
         return vis_images
 
-    def recalculate_model_average_batch_norm_statistics(self, data_loader):
+    def recalculate_batch_norm_statistics(self, data_loader):
         r"""Update the statistics in the moving average model.
 
         Args:
             data_loader (pytorch data loader): Data loader for estimating the
                 statistics.
         """
-        if not self.cfg.trainer.model_average:
+        if not self.cfg.trainer.model_average_config.enabled:
             return
         model_average_iteration = \
-            self.cfg.trainer.model_average_batch_norm_estimation_iteration
+            self.cfg.trainer.model_average_config.num_batch_norm_estimation_iterations
         if model_average_iteration == 0:
             return
         with torch.no_grad():
@@ -248,17 +221,15 @@ class Trainer(BaseTrainer):
         regular FID and one for average FID. If no moving average model,
         we just report average FID.
         """
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             regular_fid, average_fid = self._compute_fid()
-            self.regular_fid_meter.write(regular_fid)
-            self.average_fid_meter.write(average_fid)
-            meters = [self.regular_fid_meter, self.average_fid_meter]
+            metric_dict = {'FID/average': average_fid, 'FID/regular': regular_fid}
+            self._write_to_meters(metric_dict, self.metric_meters, reduce=False)
         else:
             regular_fid = self._compute_fid()
-            self.regular_fid_meter.write(regular_fid)
-            meters = [self.regular_fid_meter]
-        for meter in meters:
-            meter.flush(self.current_iteration)
+            metric_dict = {'FID/regular': regular_fid}
+            self._write_to_meters(metric_dict, self.metric_meters, reduce=False)
+        self._flush_meters(self.metric_meters)
 
     def _compute_fid(self):
         r"""We will compute FID for the regular model using the eval mode.
@@ -277,7 +248,7 @@ class Trainer(BaseTrainer):
                                         preprocess=preprocess)
         print('Epoch {:05}, Iteration {:09}, Regular FID {}'.format(
             self.current_epoch, self.current_iteration, regular_fid_value))
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             avg_net_G_for_evaluation = \
                 functools.partial(self.net_G.module.averaged_model,
                                   random_style=True)

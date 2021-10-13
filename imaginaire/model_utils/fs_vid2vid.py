@@ -1,10 +1,9 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 """Utils for the few shot vid2vid model."""
 import random
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -381,20 +380,25 @@ def select_object(data, obj_indices=None):
     Returns:
         data (dict): Output data.
     """
-    op_key = 'poses-openpose'
-    if op_key in data:
-        for i in range(len(data[op_key])):
-            # data[op_key] is a list of dicts for different frames.
-            # people = data[op_key][i]['people']
-            people = data[op_key][i]
-            # "people" is a list of people dicts found by OpenPose. We will
-            # use the obj_index to get the target person from the list, and
-            # write it back to the dict.
-            # data[op_key][i]['people'] = [people[obj_indices[i]]]
-            if obj_indices is not None:
-                data[op_key][i] = people[obj_indices[i]]
-            else:
-                data[op_key][i] = people[0]
+    op_keys = ['poses-openpose', 'captions-clip']
+    for op_key in op_keys:
+        if op_key in data:
+            for i in range(len(data[op_key])):
+                # data[op_key] is a list of dicts for different frames.
+                # people = data[op_key][i]['people']
+                people = data[op_key][i]
+                # "people" is a list of people dicts found by OpenPose. We will
+                # use the obj_index to get the target person from the list, and
+                # write it back to the dict.
+                # data[op_key][i]['people'] = [people[obj_indices[i]]]
+                if obj_indices is not None:
+                    data[op_key][i] = people[obj_indices[i]]
+                else:
+                    if op_key == 'poses-openpose':
+                        data[op_key][i] = people[0]
+                    else:
+                        idx = random.randint(0, len(people) - 1)
+                        data[op_key][i] = people[idx]
     return data
 
 
@@ -825,7 +829,7 @@ def random_roll(tensors):
     return [roll(t, ny, nx, flip) for t in tensors]
 
 
-def roll(t, ny, nx, flip):
+def roll(t, ny, nx, flip=False):
     r"""Roll and flip the tensor by specified amounts.
 
     Args:

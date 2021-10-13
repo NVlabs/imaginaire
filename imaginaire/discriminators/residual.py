@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from imaginaire.layers import Conv2dBlock, Res2dBlock
+from imaginaire.third_party.upfirdn2d import BlurDownsample
 
 
 class ResDiscriminator(nn.Module):
@@ -63,7 +64,10 @@ class ResDiscriminator(nn.Module):
             num_filters = min(num_filters * 2, max_num_filters)
             model.append(Res2dBlock(num_filters_prev, num_filters, order=order,
                                     **conv_params))
-            model.append(nn.AvgPool2d(2, stride=2))
+            if anti_aliased:
+                model.append(BlurDownsample())
+            else:
+                model.append(nn.AvgPool2d(2, stride=2))
         if aggregation == 'pool':
             model += [torch.nn.AdaptiveAvgPool2d(1)]
         elif aggregation == 'conv':

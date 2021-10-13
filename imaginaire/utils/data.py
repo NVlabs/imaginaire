@@ -1,56 +1,61 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
 # flake8: noqa: E712
 """Utils for handling datasets."""
 
+import time
 import numpy as np
 from PIL import Image
 
 # https://github.com/albumentations-team/albumentations#comments
 import cv2
-from imaginaire.utils.distributed import master_only_print as print
+# from imaginaire.utils.distributed import master_only_print as print
 import albumentations as alb  # noqa nopep8
+
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
-
 
 IMG_EXTENSIONS = ('jpg', 'jpeg', 'png', 'ppm', 'bmp',
                   'pgm', 'tif', 'tiff', 'webp',
                   'JPG', 'JPEG', 'PNG', 'PPM', 'BMP',
                   'PGM', 'TIF', 'TIFF', 'WEBP')
+HDR_IMG_EXTENSIONS = ('hdr',)
 VIDEO_EXTENSIONS = 'mp4'
 
 
 class Augmentor(object):
     r"""Handles data augmentation using albumentations library."""
 
-    def __init__(self, aug_list, image_data_types, interpolators,
-                 keypoint_data_types):
+    def __init__(self, aug_list, individual_video_frame_aug_list, image_data_types, is_mask,
+                 keypoint_data_types, interpolator):
         r"""Initializes augmentation pipeline.
 
         Args:
             aug_list (list): List of augmentation operations in sequence.
+            individual_video_frame_aug_list (list): List of augmentation operations in sequence that will be applied
+                to individual frames of videos independently.
             image_data_types (list): List of keys in expected inputs.
-            interpolators (list): List of PIL.Image interpolators associated
-                with input. NEAREST means image is segmentation map,
-                BILINEAR means continuous valued image.
+            is_mask (dict): Whether this data type is discrete masks?
             keypoint_data_types (list): List of keys which are keypoints.
         """
 
         self.aug_list = aug_list
+        self.individual_video_frame_aug_list = individual_video_frame_aug_list
         self.image_data_types = image_data_types
-        self.interpolators = interpolators
+        self.is_mask = is_mask
         self.crop_h, self.crop_w = None, None
         self.resize_h, self.resize_w = None, None
         self.resize_smallest_side = None
         self.max_time_step = 1
         self.keypoint_data_types = keypoint_data_types
+        self.interpolator = interpolator
 
         self.augment_ops = self._build_augmentation_ops()
+        self.individual_video_frame_augmentation_ops = self._build_individual_video_frame_augmentation_ops()
         # Both crop and resize can't be none at the same time.
-        if self.crop_h is None and self.resize_smallest_side is None and\
+        if self.crop_h is None and self.resize_smallest_side is None and \
                 self.resize_h is None:
             raise ValueError('resize_smallest_side, resize_h_w, '
                              'and crop_h_w cannot all be missing.')
@@ -61,16 +66,44 @@ class Augmentor(object):
         if self.resize_smallest_side is None and self.resize_h is None:
             self.resize_h, self.resize_w = self.crop_h, self.crop_w
 
+    def _build_individual_video_frame_augmentation_ops(self):
+        r"""Builds sequence of augmentation ops that will be applied to each frame in the video independently.
+        Returns:
+            (list of alb.ops): List of augmentation ops.
+        """
+        augs = []
+        for key, value in self.individual_video_frame_aug_list.items():
+            if key == 'random_scale_limit':
+                if type(value) == float:
+                    scale_limit_lb = scale_limit_ub = value
+                    p = 1
+                else:
+                    scale_limit_lb = value['scale_limit_lb']
+                    scale_limit_ub = value['scale_limit_ub']
+                    p = value['p']
+                augs.append(alb.RandomScale(scale_limit=(-scale_limit_lb, scale_limit_ub), p=p))
+            elif key == 'random_crop_h_w':
+                h, w = value.split(',')
+                h, w = int(h), int(w)
+                self.crop_h, self.crop_w = h, w
+                augs.append(alb.PadIfNeeded(min_height=h, min_width=w))
+                augs.append(alb.RandomCrop(h, w, always_apply=True, p=1))
+        return augs
+
     def _build_augmentation_ops(self):
         r"""Builds sequence of augmentation ops.
-
         Returns:
             (list of alb.ops): List of augmentation ops.
         """
         augs = []
         for key, value in self.aug_list.items():
             if key == 'resize_smallest_side':
-                self.resize_smallest_side = value
+                if isinstance(value, int):
+                    self.resize_smallest_side = value
+                else:
+                    h, w = value.split(',')
+                    h, w = int(h), int(w)
+                    self.resize_smallest_side = (h, w)
             elif key == 'resize_h_w':
                 h, w = value.split(',')
                 h, w = int(h), int(w)
@@ -108,6 +141,31 @@ class Augmentor(object):
                 # was applied in order to correctly modify keypoint data.
                 if value:
                     augs.append(alb.HorizontalFlip(always_apply=False, p=0.5))
+            # The options below including contrast, blur, motion_blur, compression, gamma
+            # were used during developing face-vid2vid.
+            elif key == 'contrast':
+                brightness_limit = value['brightness_limit']
+                contrast_limit = value['contrast_limit']
+                p = value['p']
+                augs.append(alb.RandomBrightnessContrast(
+                    brightness_limit=brightness_limit, contrast_limit=contrast_limit, p=p))
+            elif key == 'blur':
+                blur_limit = value['blur_limit']
+                p = value['p']
+                augs.append(alb.Blur(blur_limit=blur_limit, p=p))
+            elif key == 'motion_blur':
+                blur_limit = value['blur_limit']
+                p = value['p']
+                augs.append(alb.MotionBlur(blur_limit=blur_limit, p=p))
+            elif key == 'compression':
+                quality_lower = value['quality_lower']
+                p = value['p']
+                augs.append(alb.ImageCompression(quality_lower=quality_lower, p=p))
+            elif key == 'gamma':
+                gamma_limit_lb = value['gamma_limit_lb']
+                gamma_limit_ub = value['gamma_limit_ub']
+                p = value['p']
+                augs.append(alb.RandomGamma(gamma_limit=(gamma_limit_lb, gamma_limit_ub), p=p))
             elif key == 'max_time_step':
                 self.max_time_step = value
                 assert self.max_time_step >= 1, \
@@ -149,7 +207,7 @@ class Augmentor(object):
                 be numpy.ndarray or list of numpy.ndarray
                 (image or list of images).
         Returns:
-            (dict):        
+            (dict):
               - targets (dict): Dict containing mapping of keys to image/mask types.
               - new_inputs (dict): Dict containing mapping of keys to data.
         """
@@ -163,14 +221,10 @@ class Augmentor(object):
                 # Image-type.
                 # Find the target type (image/mask) based on interpolation
                 # method.
-                interp = self.interpolators[data_type]
-                if interp == Image.NEAREST:
+                if self.is_mask[data_type]:
                     target_type = 'mask'
-                elif interp == Image.BILINEAR:
-                    target_type = 'image'
                 else:
-                    raise NotImplementedError(
-                        '%s is not supported yet' % (interp))
+                    target_type = 'image'
             else:
                 raise ValueError(
                     'Data type: %s is not image or keypoint' % (data_type))
@@ -196,7 +250,7 @@ class Augmentor(object):
             augmented (dict): Dict containing frames with keys of the form
             'key', 'key::00001', 'key::00002', ..., 'key::N'.
         Returns:
-            (dict):    
+            (dict):
               - outputs (dict): Dict with list of collated inputs, i.e. frames of
               - same key are arranged in order ['key', 'key::00001', ..., 'key::N'].
         """
@@ -219,28 +273,33 @@ class Augmentor(object):
             height (int): Input image height.
             width (int): Input image width.
         Returns:
-            (dict):   
+            (dict):
               - height (int): Height to resize image to.
               - width (int): Width to resize image to.
         """
         if self.resize_smallest_side is None:
             return self.resize_h, self.resize_w
 
-        if height <= width:
-            new_height = self.resize_smallest_side
+        if isinstance(self.resize_smallest_side, int):
+            resize_smallest_height, resize_smallest_width = self.resize_smallest_side, self.resize_smallest_side
+        else:
+            resize_smallest_height, resize_smallest_width = self.resize_smallest_side
+
+        if height * resize_smallest_width <= width * resize_smallest_height:
+            new_height = resize_smallest_height
             new_width = int(np.round(new_height * width / float(height)))
         else:
-            new_width = self.resize_smallest_side
+            new_width = resize_smallest_width
             new_height = int(np.round(new_width * height / float(width)))
         return new_height, new_width
 
-    def _perform_unpaired_augmentation(self, inputs):
-        r"""Perform different data augmentation on different inputs.
+    def _perform_unpaired_augmentation(self, inputs, augment_ops):
+        r"""Perform different data augmentation on different image inputs. Note that this operation only works
 
         Args:
             inputs (dict): Keys are from self.image_data_types. Values are list
                 of numpy.ndarray (list of images).
-        
+            augment_ops (list): The augmentation operations.
         Returns:
             (dict):
               - augmented (dict): Augmented inputs, with same keys as inputs.
@@ -251,26 +310,27 @@ class Augmentor(object):
         for data_type in inputs:
             assert data_type in self.image_data_types
             augmented, flipped_flag = self._perform_paired_augmentation(
-                {data_type: inputs[data_type]})
+                {data_type: inputs[data_type]}, augment_ops)
             inputs[data_type] = augmented[data_type]
             is_flipped[data_type] = flipped_flag
         return inputs, is_flipped
 
-    def _perform_paired_augmentation(self, inputs):
+    def _perform_paired_augmentation(self, inputs, augment_ops):
         r"""Perform same data augmentation on all inputs.
 
         Args:
             inputs (dict): Keys are from self.augmentable_data_types. Values are
                 list of numpy.ndarray (list of images).
-        
+            augment_ops (list): The augmentation operations.
+
         Returns:
             (dict):
               - augmented (dict): Augmented inputs, with same keys as inputs.
               - is_flipped (bool): Flag which tells if images have been LR flipped.
         """
-        # All input images here have the same size, and the calling function
-        # has checked this.
+        # Different data types may have different sizes and we use the largest one as the original size.
         # Convert PIL images to numpy array.
+        self.original_h, self.original_w = 0, 0
         for data_type in inputs:
             if data_type in self.keypoint_data_types or \
                     data_type not in self.image_data_types:
@@ -278,19 +338,21 @@ class Augmentor(object):
             for idx in range(len(inputs[data_type])):
                 value = inputs[data_type][idx]
                 # Get resize h, w.
-                w, h = value.size
-                self.original_h, self.original_w = h, w
-                self.resize_h, self.resize_w = self._get_resize_h_w(h, w)
+                w, h = get_image_size(value)
+                self.original_h, self.original_w = max(self.original_h, h), max(self.original_w, w)
+                # self.original_h, self.original_w = h, w
+                # self.resize_h, self.resize_w = self._get_resize_h_w(h, w)
                 # Convert to numpy array with 3 dims (H, W, C).
                 value = np.array(value)
                 if value.ndim == 2:
                     value = value[..., np.newaxis]
                 inputs[data_type][idx] = value
+        self.resize_h, self.resize_w = self._get_resize_h_w(self.original_h, self.original_w)
 
         # Add resize op to augmentation ops.
         aug_ops_with_resize = [alb.Resize(
-            self.resize_h, self.resize_w, always_apply=1, p=1)] + \
-            self.augment_ops
+            self.resize_h, self.resize_w, interpolation=getattr(cv2, self.interpolator), always_apply=1, p=1
+        )] + augment_ops
 
         # Create targets.
         targets, new_inputs = self._create_augmentation_targets(inputs)
@@ -337,13 +399,14 @@ class Augmentor(object):
 
         return augmented, is_flipped
 
-    def perform_augmentation(self, inputs, paired):
+    def perform_augmentation(self, inputs, paired, augment_ops):
         r"""Entry point for augmentation.
 
         Args:
             inputs (dict): Keys are from self.augmentable_data_types. Values are
                 list of numpy.ndarray (list of images).
             paired (bool): Apply same augmentation to all input keys?
+            augment_ops (list): The augmentation operations.
         """
         # Make sure that all inputs are of same size, else trouble will
         # ensue. This is because different images might have different
@@ -355,34 +418,21 @@ class Augmentor(object):
                 continue
             for idx in range(len(inputs[data_type])):
                 if idx == 0:
-                    w, h = inputs[data_type][idx].size
+                    w, h = get_image_size(inputs[data_type][idx])
                 else:
-                    this_w, this_h = inputs[data_type][idx].size
+                    this_w, this_h = get_image_size(inputs[data_type][idx])
                     # assert this_w == w and this_h == h
                     # assert this_w / (1.0 * this_h) == w / (1.0 * h)
-                    if this_w / (1.0 * this_h) != w / (1.0 * h):
-                        print('(%d, %d) != (%d, %d)' % (
-                            this_w, this_h, w, h))
         # Check across data types.
         if paired and self.resize_smallest_side is not None:
             for idx, data_type in enumerate(inputs):
                 if data_type in self.keypoint_data_types or \
                         data_type not in self.image_data_types:
                     continue
-                if idx == 0:
-                    w, h = inputs[data_type][0].size
-                else:
-                    this_w, this_h = inputs[data_type][0].size
-                    # assert this_w == w and this_h == h
-                    # assert this_w / (1.0 * this_h) == w / (1.0 * h)
-                    if this_w / (1.0 * this_h) != w / (1.0 * h):
-                        print('(%d, %d) != (%d, %d)' % (
-                            this_w, this_h, w, h))
-        # Do appropriate augmentation.
         if paired:
-            return self._perform_paired_augmentation(inputs)
+            return self._perform_paired_augmentation(inputs, augment_ops)
         else:
-            return self._perform_unpaired_augmentation(inputs)
+            return self._perform_unpaired_augmentation(inputs, augment_ops)
 
 
 def load_from_lmdb(keys, lmdbs):
@@ -433,6 +483,38 @@ def load_from_folder(keys, handles):
     return data
 
 
+def load_from_object_store(keys, handles):
+    r"""Load keys from AWS S3 handles.
+
+    Args:
+        keys (dict): This has data_type as key, and a list of paths as
+            values.
+        handles (dict): This has data_type as key, and Folder handle as value.
+    Returns:
+        data (dict): This has data_type as key, and a list of decoded items from
+            folders as value.
+    """
+    data = {}
+    for data_type in keys:
+        if data_type not in data:
+            data[data_type] = []
+        data_type_keys = keys[data_type]
+        if not isinstance(data_type_keys, list):
+            data_type_keys = [data_type_keys]
+        for key in data_type_keys:
+            while True:
+                try:
+                    data[data_type].append(handles[data_type].getitem_by_path(key, data_type))
+                except Exception as e:
+                    print(e)
+                    print(key, data_type)
+                    print('Retrying in 30 seconds')
+                    time.sleep(30)
+                    continue
+                break
+    return data
+
+
 def get_paired_input_image_channel_number(data_cfg):
     r"""Get number of channels for the input image.
 
@@ -466,10 +548,12 @@ def get_paired_input_label_channel_number(data_cfg, video=False):
     for ix, data_type in enumerate(data_cfg.input_types):
         for k in data_type:
             if k in data_cfg.input_labels:
-                num_labels += data_type[k].num_channels
-                if getattr(data_type[k], 'use_dont_care', False):
-                    print(data_type[k].use_dont_care)
-                    num_labels += 1
+                if hasattr(data_cfg, 'one_hot_num_classes') and k in data_cfg.one_hot_num_classes:
+                    num_labels += data_cfg.one_hot_num_classes[k]
+                    if getattr(data_cfg, 'use_dont_care', False):
+                        num_labels += 1
+                else:
+                    num_labels += data_type[k].num_channels
             print('Concatenate %s for input.' % data_type)
 
     if video:
@@ -504,7 +588,7 @@ def get_crop_h_w(augmentation):
     Returns:
         (dict):
           - crop_h (int): Height of the image crop.
-          - crop_w (int): Width of the image crop.          
+          - crop_w (int): Width of the image crop.
     """
     print(augmentation.__dict__.keys())
     for k in augmentation.__dict__.keys():
@@ -518,3 +602,11 @@ def get_crop_h_w(augmentation):
             print('\tCrop size: (%d, %d)' % (crop_h, crop_w))
             return crop_h, crop_w
     raise AttributeError
+
+
+def get_image_size(x):
+    try:
+        w, h = x.size
+    except Exception:
+        h, w, _ = x.shape
+    return w, h

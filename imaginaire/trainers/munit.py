@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -8,9 +8,9 @@ from imaginaire.evaluation import compute_fid
 from imaginaire.losses import (GANLoss, GaussianKLLoss,
                                PerceptualLoss)
 from imaginaire.trainers.base import BaseTrainer
-from imaginaire.utils.distributed import master_only_print as print
-from imaginaire.utils.meters import Meter
 from imaginaire.utils.misc import random_shift
+from imaginaire.utils.distributed import master_only_print as print
+from imaginaire.utils.diff_aug import apply_diff_aug
 
 
 class Trainer(BaseTrainer):
@@ -37,23 +37,6 @@ class Trainer(BaseTrainer):
         self.best_fid_a = None
         self.best_fid_b = None
 
-    def _init_tensorboard(self):
-        r"""Initialize the tensorboard."""
-        # Logging frequency: self.cfg.logging_iter
-        self.meters = {}
-        names = ['optim/gen_lr', 'optim/dis_lr', 'time/iteration', 'time/epoch']
-        for name in names:
-            self.meters[name] = Meter(name)
-
-        # Logging frequency: self.cfg.snapshot_save_iter
-        names = ['FID_a', 'best_FID_a', 'FID_b', 'best_FID_b']
-        self.metric_meters = {}
-        for name in names:
-            self.metric_meters[name] = Meter(name)
-
-        # Logging frequency: self.cfg.image_display_iter
-        self.image_meter = Meter('images')
-
     def _init_loss(self, cfg):
         r"""Initialize loss terms. In MUNIT, we have several loss terms
         including the GAN loss, the image reconstruction loss, the content
@@ -67,15 +50,10 @@ class Trainer(BaseTrainer):
         self.criteria['gan'] = GANLoss(cfg.trainer.gan_mode)
         self.criteria['kl'] = GaussianKLLoss()
         self.criteria['image_recon'] = torch.nn.L1Loss()
-        self.criteria['content_recon'] = torch.nn.L1Loss()
-        self.criteria['style_recon'] = torch.nn.L1Loss()
-
         if getattr(cfg.trainer.loss_weight, 'perceptual', 0) > 0:
             self.criteria['perceptual'] = \
-                PerceptualLoss(cfg=cfg,
-                               network=cfg.trainer.perceptual_mode,
-                               layers=cfg.trainer.perceptual_layers,
-                               instance_normalized=True)
+                PerceptualLoss(network=cfg.trainer.perceptual_mode,
+                               layers=cfg.trainer.perceptual_layers)
 
         for loss_name, loss_weight in cfg.trainer.loss_weight.__dict__.items():
             if loss_weight > 0:
@@ -90,12 +68,22 @@ class Trainer(BaseTrainer):
         cycle_recon = 'cycle_recon' in self.weights
         image_recon = 'image_recon' in self.weights
         perceptual = 'perceptual' in self.weights
+        within_latent_recon = 'style_recon_within' in self.weights or \
+                              'content_recon_within' in self.weights
 
         net_G_output = self.net_G(data,
                                   image_recon=image_recon,
                                   cycle_recon=cycle_recon,
-                                  within_latent_recon=False)
-        net_D_output = self.net_D(data, net_G_output, real=False,
+                                  within_latent_recon=within_latent_recon)
+
+        # Differentiable augmentation.
+        keys = ['images_ab', 'images_ba']
+        if self.gan_recon:
+            keys += ['images_aa', 'images_bb']
+        net_D_output = self.net_D(data,
+                                  apply_diff_aug(
+                                      net_G_output, keys, self.aug_policy),
+                                  real=False,
                                   gan_recon=self.gan_recon)
 
         self._time_before_loss()
@@ -141,25 +129,47 @@ class Trainer(BaseTrainer):
                                              data['images_b'])
 
         # Style reconstruction loss
-        self.gen_losses['style_recon_a'] = \
-            self.criteria['style_recon'](net_G_output['style_ba'],
-                                         net_G_output['style_a_rand'])
-        self.gen_losses['style_recon_b'] = \
-            self.criteria['style_recon'](net_G_output['style_ab'],
-                                         net_G_output['style_b_rand'])
+        self.gen_losses['style_recon_a'] = torch.abs(
+            net_G_output['style_ba'] -
+            net_G_output['style_a_rand']).mean()
+        self.gen_losses['style_recon_b'] = torch.abs(
+            net_G_output['style_ab'] -
+            net_G_output['style_b_rand']).mean()
         self.gen_losses['style_recon'] = \
             self.gen_losses['style_recon_a'] + self.gen_losses['style_recon_b']
 
+        if within_latent_recon:
+            self.gen_losses['style_recon_aa'] = torch.abs(
+                net_G_output['style_aa'] -
+                net_G_output['style_a'].detach()).mean()
+            self.gen_losses['style_recon_bb'] = torch.abs(
+                net_G_output['style_bb'] -
+                net_G_output['style_b'].detach()).mean()
+            self.gen_losses['style_recon_within'] = \
+                self.gen_losses['style_recon_aa'] + \
+                self.gen_losses['style_recon_bb']
+
         # Content reconstruction loss
-        self.gen_losses['content_recon_a'] = \
-            self.criteria['content_recon'](net_G_output['content_ab'],
-                                           net_G_output['content_a'].detach())
-        self.gen_losses['content_recon_b'] = \
-            self.criteria['content_recon'](net_G_output['content_ba'],
-                                           net_G_output['content_b'].detach())
+        self.gen_losses['content_recon_a'] = torch.abs(
+            net_G_output['content_ab'] -
+            net_G_output['content_a'].detach()).mean()
+        self.gen_losses['content_recon_b'] = torch.abs(
+            net_G_output['content_ba'] -
+            net_G_output['content_b'].detach()).mean()
         self.gen_losses['content_recon'] = \
             self.gen_losses['content_recon_a'] + \
             self.gen_losses['content_recon_b']
+
+        if within_latent_recon:
+            self.gen_losses['content_recon_aa'] = torch.abs(
+                net_G_output['content_aa'] -
+                net_G_output['content_a'].detach()).mean()
+            self.gen_losses['content_recon_bb'] = torch.abs(
+                net_G_output['content_bb'] -
+                net_G_output['content_b'].detach()).mean()
+            self.gen_losses['content_recon_within'] = \
+                self.gen_losses['content_recon_aa'] + \
+                self.gen_losses['content_recon_bb']
 
         # KL loss
         self.gen_losses['kl'] = \
@@ -169,10 +179,10 @@ class Trainer(BaseTrainer):
         # Cycle reconstruction loss
         if cycle_recon:
             self.gen_losses['cycle_recon'] = \
-                self.criteria['image_recon'](net_G_output['images_aba'],
-                                             data['images_a']) + \
-                self.criteria['image_recon'](net_G_output['images_bab'],
-                                             data['images_b'])
+                torch.abs(net_G_output['images_aba'] -
+                          data['images_a']).mean() + \
+                torch.abs(net_G_output['images_bab'] -
+                          data['images_b']).mean()
 
         # Compute total loss
         total_loss = self._get_total_loss(gen_forward=True)
@@ -192,7 +202,17 @@ class Trainer(BaseTrainer):
                                       within_latent_recon=False)
         net_G_output['images_ba'].requires_grad = True
         net_G_output['images_ab'].requires_grad = True
-        net_D_output = self.net_D(data, net_G_output, gan_recon=self.gan_recon)
+
+        # Differentiable augmentation.
+        keys_fake = ['images_ab', 'images_ba']
+        if self.gan_recon:
+            keys_fake += ['images_aa', 'images_bb']
+        keys_real = ['images_a', 'images_b']
+
+        net_D_output = self.net_D(
+            apply_diff_aug(data, keys_real, self.aug_policy),
+            apply_diff_aug(net_G_output, keys_fake, self.aug_policy),
+            gan_recon=self.gan_recon)
 
         self._time_before_loss()
 
@@ -205,21 +225,6 @@ class Trainer(BaseTrainer):
             self.criteria['gan'](net_D_output['out_ab'], False)
         self.dis_losses['gan'] = \
             self.dis_losses['gan_a'] + self.dis_losses['gan_b']
-
-        # Gradient penalty.
-        if 'gp' in self.weights:
-            images_a_gp = self.criteria['gp'].get_dis_inputs(
-                data['images_a'], net_G_output['images_ba'])
-            images_b_gp = self.criteria['gp'].get_dis_inputs(
-                data['images_b'], net_G_output['images_ab'])
-            net_D_input_gp = dict(images_ab=images_b_gp, images_ba=images_a_gp)
-            net_D_output_gp = self.net_D(data, net_D_input_gp, real=False)
-            self.dis_losses['gp_a'] = self.criteria['gp'](
-                net_D_output_gp['images_ba'], net_D_output_gp['out_ba'])
-            self.dis_losses['gp_b'] = self.criteria['gp'](
-                net_D_output_gp['images_ab'], net_D_output_gp['out_ab'])
-            self.dis_losses['gp'] = \
-                self.dis_losses['gp_a'] + self.dis_losses['gp_b']
 
         # Consistency regularization.
         self.dis_losses['consistency_reg'] = \
@@ -250,7 +255,7 @@ class Trainer(BaseTrainer):
         Args:
             data (dict): The current batch.
         """
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G_for_evaluation = self.net_G.module.averaged_model
         else:
             net_G_for_evaluation = self.net_G
@@ -291,7 +296,7 @@ class Trainer(BaseTrainer):
         r"""Compute FID for both domains.
         """
         self.net_G.eval()
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G_for_evaluation = self.net_G.module.averaged_model
         else:
             net_G_for_evaluation = self.net_G

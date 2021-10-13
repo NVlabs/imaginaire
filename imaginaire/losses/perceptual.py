@@ -1,37 +1,41 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved
 import torch
 import torch.nn.functional as F
 import torchvision
-from torch import nn
+from torch import nn, distributed as dist
 
-from imaginaire.utils.distributed import master_only_print as print
-from imaginaire.utils.misc import apply_imagenet_normalization
+from imaginaire.losses.info_nce import InfoNCELoss
+from imaginaire.utils.distributed import master_only_print as print, \
+    is_local_master
+from imaginaire.utils.misc import apply_imagenet_normalization, to_float
 
 
 class PerceptualLoss(nn.Module):
     r"""Perceptual loss initialization.
 
     Args:
-        cfg (Config): Configuration file.
-        network (str) : The name of the loss network: 'vgg16' | 'vgg19'.
-        layers (str or list of str) : The layers used to compute the loss.
-        weights (float or list of float : The loss weights of each layer.
-        criterion (str): The type of distance function: 'l1' | 'l2'.
-        resize (bool) : If ``True``, resize the input images to 224x224.
-        resize_mode (str): Algorithm used for resizing.
-        instance_normalized (bool): If ``True``, applies instance normalization
-            to the feature maps before computing the distance.
-        num_scales (int): The loss will be evaluated at original size and
-            this many times downsampled sizes.
+       network (str) : The name of the loss network: 'vgg16' | 'vgg19'.
+       layers (str or list of str) : The layers used to compute the loss.
+       weights (float or list of float : The loss weights of each layer.
+       criterion (str): The type of distance function: 'l1' | 'l2'.
+       resize (bool) : If ``True``, resize the input images to 224x224.
+       resize_mode (str): Algorithm used for resizing.
+       num_scales (int): The loss will be evaluated at original size and
+        this many times downsampled sizes.
+       per_sample_weight (bool): Output loss for individual samples in the
+        batch instead of mean loss.
     """
 
-    def __init__(self, cfg, network='vgg19', layers='relu_4_1', weights=None,
+    def __init__(self, network='vgg19', layers='relu_4_1', weights=None,
                  criterion='l1', resize=False, resize_mode='bilinear',
-                 instance_normalized=False, num_scales=1):
+                 num_scales=1, per_sample_weight=False,
+                 info_nce_temperature=0.07,
+                 info_nce_gather_distributed=True,
+                 info_nce_learn_temperature=True,
+                 info_nce_flatten=True):
         super().__init__()
         if isinstance(layers, str):
             layers = [layers]
@@ -39,6 +43,12 @@ class PerceptualLoss(nn.Module):
             weights = [1.] * len(layers)
         elif isinstance(layers, float) or isinstance(layers, int):
             weights = [weights]
+
+        if dist.is_initialized() and not is_local_master():
+            # Make sure only the first process in distributed training downloads
+            # the model, and the others will use the cache
+            # noinspection PyUnresolvedReferences
+            torch.distributed.barrier()
 
         assert len(layers) == len(weights), \
             'The number of layers (%s) must be equal to ' \
@@ -60,57 +70,60 @@ class PerceptualLoss(nn.Module):
         else:
             raise ValueError('Network %s is not recognized' % network)
 
+        if dist.is_initialized() and is_local_master():
+            # Make sure only the first process in distributed training downloads
+            # the model, and the others will use the cache
+            # noinspection PyUnresolvedReferences
+            torch.distributed.barrier()
+
         self.num_scales = num_scales
         self.layers = layers
         self.weights = weights
+        reduction = 'mean' if not per_sample_weight else 'none'
         if criterion == 'l1':
-            self.criterion = nn.L1Loss()
+            self.criterion = nn.L1Loss(reduction=reduction)
         elif criterion == 'l2' or criterion == 'mse':
-            self.criterion = nn.MSELoss()
+            self.criterion = nn.MSELoss(reduction=reduction)
+        elif criterion == 'info_nce':
+            self.criterion = InfoNCELoss(
+                temperature=info_nce_temperature,
+                gather_distributed=info_nce_gather_distributed,
+                learn_temperature=info_nce_learn_temperature,
+                flatten=info_nce_flatten,
+                single_direction=True
+            )
         else:
             raise ValueError('Criterion %s is not recognized' % criterion)
         self.resize = resize
         self.resize_mode = resize_mode
-        self.instance_normalized = instance_normalized
-        self.fp16 = cfg.trainer.amp == 'O1'
         print('Perceptual loss:')
         print('\tMode: {}'.format(network))
-        if self.fp16:
-            print('\tPerceptual loss is evaluated in the fp16 mode.')
-            self.model.half()
 
-    def forward(self, inp, target):
+    def forward(self, inp, target, per_sample_weights=None):
         r"""Perceptual loss forward.
 
         Args:
            inp (4D tensor) : Input tensor.
            target (4D tensor) : Ground truth tensor, same shape as the input.
-
+           per_sample_weight (bool): Output loss for individual samples in the
+            batch instead of mean loss.
         Returns:
            (scalar tensor) : The perceptual loss.
         """
+        if not torch.is_autocast_enabled():
+            inp, target = to_float([inp, target])
+
         # Perceptual loss should operate in eval mode by default.
         self.model.eval()
-        inp, target = \
-            apply_imagenet_normalization(inp), \
-            apply_imagenet_normalization(target)
+        inp, target = apply_imagenet_normalization(inp), apply_imagenet_normalization(target)
         if self.resize:
-            inp = F.interpolate(
-                inp, mode=self.resize_mode, size=(224, 224),
-                align_corners=False)
-            target = F.interpolate(
-                target, mode=self.resize_mode, size=(224, 224),
-                align_corners=False)
+            inp = F.interpolate(inp, mode=self.resize_mode, size=(224, 224), align_corners=False)
+            target = F.interpolate(target, mode=self.resize_mode, size=(224, 224), align_corners=False)
 
         # Evaluate perceptual loss at each scale.
         loss = 0
         for scale in range(self.num_scales):
-            if self.fp16:
-                input_features, target_features = \
-                    self.model(inp.half()), self.model(target.half())
-            else:
-                input_features, target_features = \
-                    self.model(inp), self.model(target)
+            input_features, target_features = self.model(inp), self.model(target)
 
             for layer, weight in zip(self.layers, self.weights):
                 # Example per-layer VGG19 loss values after applying
@@ -120,14 +133,16 @@ class PerceptualLoss(nn.Module):
                 # relu_3_1, 0.349977
                 # relu_4_1, 0.544188
                 # relu_5_1, 0.906261
-                input_feature = input_features[layer]
-                target_feature = target_features[layer].detach()
-                if self.instance_normalized:
-                    input_feature = F.instance_norm(input_feature)
-                    target_feature = F.instance_norm(target_feature)
-
-                loss += weight * self.criterion(input_feature,
-                                                target_feature)
+                # print('%s, %f' % (
+                #     layer,
+                #     weight * self.criterion(
+                #                  input_features[layer],
+                #                  target_features[
+                #                  layer].detach()).item()))
+                l_tmp = self.criterion(input_features[layer], target_features[layer].detach())
+                if per_sample_weights is not None:
+                    l_tmp = l_tmp.mean(1).mean(1).mean(1)
+                loss += weight * l_tmp
             # Downsample the input and target.
             if scale != self.num_scales - 1:
                 inp = F.interpolate(
@@ -174,7 +189,9 @@ class _PerceptualNetwork(nn.Module):
 
 def _vgg19(layers):
     r"""Get vgg19 layers"""
-    network = torchvision.models.vgg19(pretrained=True).features
+    vgg = torchvision.models.vgg19(pretrained=True)
+    # network = vgg.features
+    network = torch.nn.Sequential(*(list(vgg.features) + [vgg.avgpool] + [nn.Flatten()] + list(vgg.classifier)))
     layer_name_mapping = {1: 'relu_1_1',
                           3: 'relu_1_2',
                           6: 'relu_2_1',
@@ -187,7 +204,12 @@ def _vgg19(layers):
                           22: 'relu_4_2',
                           24: 'relu_4_3',
                           26: 'relu_4_4',
-                          29: 'relu_5_1'}
+                          29: 'relu_5_1',
+                          31: 'relu_5_2',
+                          33: 'relu_5_3',
+                          35: 'relu_5_4',
+                          36: 'pool_5',
+                          42: 'fc_2'}
     return _PerceptualNetwork(network, layer_name_mapping, layers)
 
 
@@ -299,7 +321,6 @@ def _robust_resnet50(layers):
 
 
 def _vgg_face_dag(layers):
-    r"""Get vgg face layers"""
     network = torchvision.models.vgg16(num_classes=2622)
     state_dict = torch.utils.model_zoo.load_url(
         'http://www.robots.ox.ac.uk/~albanie/models/pytorch-mcn/'
@@ -320,7 +341,7 @@ def _vgg_face_dag(layers):
         28: 'conv5_3'}
     new_state_dict = {}
     for k, v in feature_layer_name_mapping.items():
-        new_state_dict['features.' + str(k) + '.weight'] =\
+        new_state_dict['features.' + str(k) + '.weight'] = \
             state_dict[v + '.weight']
         new_state_dict['features.' + str(k) + '.bias'] = \
             state_dict[v + '.bias']
@@ -338,21 +359,37 @@ def _vgg_face_dag(layers):
     network.load_state_dict(new_state_dict)
 
     class Flatten(nn.Module):
-        r"""Flatten the tensor"""
-
         def forward(self, x):
-            r"""Flatten it"""
             return x.view(x.shape[0], -1)
 
     layer_name_mapping = {
-        1: 'avgpool',
-        3: 'fc6',
-        4: 'relu_6',
-        6: 'fc7',
-        7: 'relu_7',
-        9: 'fc8'}
-    seq_layers = [network.features, network.avgpool, Flatten()]
-    for i in range(7):
-        seq_layers += [network.classifier[i]]
+        0: 'conv_1_1',
+        1: 'relu_1_1',
+        2: 'conv_1_2',
+        5: 'conv_2_1',  # 1/2
+        6: 'relu_2_1',
+        7: 'conv_2_2',
+        10: 'conv_3_1',  # 1/4
+        11: 'relu_3_1',
+        12: 'conv_3_2',
+        14: 'conv_3_3',
+        17: 'conv_4_1',  # 1/8
+        18: 'relu_4_1',
+        19: 'conv_4_2',
+        21: 'conv_4_3',
+        24: 'conv_5_1',  # 1/16
+        25: 'relu_5_1',
+        26: 'conv_5_2',
+        28: 'conv_5_3',
+        33: 'fc6',
+        36: 'fc7',
+        39: 'fc8'
+    }
+    seq_layers = []
+    for feature in network.features:
+        seq_layers += [feature]
+    seq_layers += [network.avgpool, Flatten()]
+    for classifier in network.classifier:
+        seq_layers += [classifier]
     network = nn.Sequential(*seq_layers)
     return _PerceptualNetwork(network, layer_name_mapping, layers)

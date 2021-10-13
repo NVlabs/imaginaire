@@ -1,7 +1,7 @@
 <img src="imaginaire_logo.svg" alt="imaginaire_logo.svg" height="360"/>
 
 # Imaginaire
-### [Docs](http://imaginaire.cc/docs) | [License](LICENSE.md) | [Installation](INSTALL.md) | [Model Zoo](MODELZOO.md)
+### [Docs](http://imaginaire.cc/) | [License](LICENSE.md) | [Installation](INSTALL.md) | [Model Zoo](MODELZOO.md)
 
 Imaginaire is a [pytorch](https://pytorch.org/) library that contains
 optimized implementation of several image and video synthesis methods developed at [NVIDIA](https://www.nvidia.com/en-us/).
@@ -9,10 +9,7 @@ optimized implementation of several image and video synthesis methods developed 
 ## License
 
 Imaginaire is released under [NVIDIA Software license](LICENSE.md).
-
-For commercial use or business inquiries, please contact [researchinquiries@nvidia.com](researchinquiries@nvidia.com)
-
-For press and other inquiries, please contact [Hector Marinez](hmarinez@nvidia.com)
+For commercial use, please consult [researchinquiries@nvidia.com](researchinquiries@nvidia.com)
 
 
 ## What's inside?
@@ -47,7 +44,15 @@ We have a tutorial for each model. Click on the model name, and your browser sho
 |:--------------------------------------------|:----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------:|
 |[vid2vid](projects/vid2vid/README.md)         | Learn a mapping that converts a semantic video to a photorealistic video.                                       |    [Wang et. al. NeurIPS 2018](https://arxiv.org/abs/1808.06601) |
 |[fs-vid2vid](projects/fs_vid2vid/README.md)   | Learn a subject-agnostic mapping that converts a semantic video and an example image to a photoreslitic video.  |    [Wang et. al. NeurIPS 2019](https://arxiv.org/abs/1808.06601) |
+
+
+### World-to-world Translation
+
+
+|Algorithm Name                               | Feature                                                                                                         | Publication                                                   |
+|:--------------------------------------------|:----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------:|
 |[wc-vid2vid](projects/wc_vid2vid/README.md)   | Improve vid2vid on view consistency and long-term consistency.                                                  |    [Mallya et. al. ECCV 2020](https://arxiv.org/abs/2007.08509) |
+|[GANcraft](projects/gancraft/README.md)   | Convert semantic block worlds to realistic-looking worlds.                                                  |    [Hao et. al. ICCV 2021](https://arxiv.org/abs/2104.07659) |
 
 
 

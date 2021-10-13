@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -66,7 +66,6 @@ class Trainer(SPADETrainer):
                               loss_weight.feature_matching)
         self._assign_criteria('Perceptual',
                               PerceptualLoss(
-                                  cfg=cfg,
                                   network=cfg.trainer.perceptual_loss.mode,
                                   layers=cfg.trainer.perceptual_loss.layers,
                                   weights=cfg.trainer.perceptual_loss.weights),
@@ -145,7 +144,7 @@ class Trainer(SPADETrainer):
                 instance map.
         """
         data = to_cuda(data)
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             net_G = self.net_G.module.module
         else:
             net_G = self.net_G.module
@@ -162,7 +161,7 @@ class Trainer(SPADETrainer):
         saving the model weights to the checkponts.
         """
         if hasattr(self.cfg.gen, 'enc'):
-            if self.cfg.trainer.model_average:
+            if self.cfg.trainer.model_average_config.enabled:
                 net_E = self.net_G.module.averaged_model.encoder
             else:
                 net_E = self.net_G.module.encoder
@@ -186,7 +185,7 @@ class Trainer(SPADETrainer):
                                         preprocess=self.pre_process)
         print('Epoch {:05}, Iteration {:09}, Regular FID {}'.format(
             self.current_epoch, self.current_iteration, regular_fid_value))
-        if self.cfg.trainer.model_average:
+        if self.cfg.trainer.model_average_config.enabled:
             avg_net_G_for_evaluation = \
                 functools.partial(self.net_G.module.averaged_model,
                                   random_style=True)

@@ -1,4 +1,4 @@
-# Copyright (C) 2020 NVIDIA Corporation.  All rights reserved.
+# Copyright (C) 2021 NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is made available under the Nvidia Source Code License-NC.
 # To view a copy of this license, check out LICENSE.md
@@ -23,13 +23,12 @@ class Discriminator(nn.Module):
     def __init__(self, dis_cfg, data_cfg):
         super(Discriminator, self).__init__()
         print('Multi-resolution patch discriminator initialization.')
-        # We assume the first datum is the ground truth image.
-        image_channels = get_paired_input_image_channel_number(data_cfg)
-        # Calculate number of channels in the input label.
-        if data_cfg.type == 'imaginaire.datasets.paired_videos':
-            num_labels = get_paired_input_label_channel_number(
-                data_cfg, video=True)
-        else:
+        image_channels = getattr(dis_cfg, 'image_channels', None)
+        if image_channels is None:
+            image_channels = get_paired_input_image_channel_number(data_cfg)
+        num_labels = getattr(dis_cfg, 'num_labels', None)
+        if num_labels is None:
+            # Calculate number of channels in the input label when not specified.
             num_labels = get_paired_input_label_channel_number(data_cfg)
 
         # Build the discriminator.
@@ -56,28 +55,31 @@ class Discriminator(nn.Module):
                 activation_norm_type,
                 weight_norm_type)
             self.discriminators.append(net_discriminator)
-        print('Done with the Multi-resolution patch '
-              'discriminator initialization.')
-        fpse_kernel_size = getattr(dis_cfg, 'fpse_kernel_size', 3)
-        fpse_activation_norm_type = getattr(dis_cfg,
-                                            'fpse_activation_norm_type',
-                                            'none')
-        self.fpse_discriminator = FPSEDiscriminator(
-            image_channels,
-            num_labels,
-            num_filters,
-            fpse_kernel_size,
-            weight_norm_type,
-            fpse_activation_norm_type)
+        print('Done with the Multi-resolution patch discriminator initialization.')
+        self.use_fpse = getattr(dis_cfg, 'use_fpse', True)
+        if self.use_fpse:
+            fpse_kernel_size = getattr(dis_cfg, 'fpse_kernel_size', 3)
+            fpse_activation_norm_type = getattr(dis_cfg,
+                                                'fpse_activation_norm_type',
+                                                'none')
+            self.fpse_discriminator = FPSEDiscriminator(
+                image_channels,
+                num_labels,
+                num_filters,
+                fpse_kernel_size,
+                weight_norm_type,
+                fpse_activation_norm_type)
 
     def _single_forward(self, input_label, input_image):
         # Compute discriminator outputs and intermediate features from input
         # images and semantic labels.
         input_x = torch.cat(
             (input_label, input_image), 1)
+        output_list = []
         features_list = []
-        pred2, pred3, pred4 = self.fpse_discriminator(input_image, input_label)
-        output_list = [pred2, pred3, pred4]
+        if self.use_fpse:
+            pred2, pred3, pred4 = self.fpse_discriminator(input_image, input_label)
+            output_list = [pred2, pred3, pred4]
         input_downsampled = input_x
         for net_discriminator in self.discriminators:
             output, features = net_discriminator(input_downsampled)

@@ -5,7 +5,6 @@ max_iter: 2
 speed_benchmark: True
 trainer:
     type: imaginaire.trainers.spade
-    amp: O0
     gan_mode: hinge
     gan_relativistic: False
     perceptual_loss:
@@ -69,8 +68,6 @@ dis:
 
 # Data options.
 data:
-    # Name of this dataset.
-    name: 'cocostuff'
     # Which dataloader to use?
     type: imaginaire.datasets.paired_images
     # How many data loading workers per GPU?
@@ -79,36 +76,35 @@ data:
         - images:
             ext: jpg
             num_channels: 3
-            interpolator: BILINEAR
             normalize: True
             use_dont_care: False
         - seg_maps:
             ext: png
-            num_channels: 183
-            interpolator: NEAREST
+            num_channels: 1
+            is_mask: True
             normalize: False
-            use_dont_care: True
         - edge_maps:
             ext: png
             num_channels: 1
-            interpolator: BILINEAR
             normalize: False
-            use_dont_care: False
+
+    full_data_ops: imaginaire.model_utils.label::make_one_hot, imaginaire.model_utils.label::concat_labels
+    use_dont_care: True
+    one_hot_num_classes:
+        seg_maps: 183
+    input_labels:
+        - seg_maps
+        - edge_maps
 
     # Which lmdb contains the ground truth image.
     input_image:
         - images
 
-    # Which labels to be concatenated as final output label from dataloader.
-    input_labels:
-        - seg_maps
-        - edge_maps
-
     # Train dataset details.
     train:
         # Input LMDBs.
         roots:
-            - dataset/unit_test/lmdb/spade
+            - dataset/unit_test/raw/spade
         # Batch size per GPU.
         batch_size: 1
         # Data augmentations to be performed in given order.
@@ -127,7 +123,7 @@ data:
     val:
         # Input LMDBs.
         roots:
-            - dataset/unit_test/lmdb/spade
+            - dataset/unit_test/raw/spade
         # Batch size per GPU.
         batch_size: 1
         # If resize_h_w is not given, then it is assumed to be same as crop_h_w.
