@@ -1,7 +1,7 @@
 <img src="imaginaire_logo.svg" alt="imaginaire_logo.svg" height="360"/>
 
 # Imaginaire
-### [Docs](http://imaginaire.cc/) | [License](LICENSE.md) | [Installation](INSTALL.md) | [Model Zoo](MODELZOO.md)
+### [Docs](http://deepimagination.cc/) | [License](LICENSE.md) | [Installation](INSTALL.md) | [Model Zoo](MODELZOO.md)
 
 Imaginaire is a [pytorch](https://pytorch.org/) library that contains
 optimized implementation of several image and video synthesis methods developed at [NVIDIA](https://www.nvidia.com/en-us/).
