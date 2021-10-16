@@ -476,7 +476,8 @@ class BaseTrainer(object):
 
         # Save everything to the checkpoint.
         if current_epoch % self.cfg.snapshot_save_epoch == 0:
-            self.save_checkpoint(current_epoch, current_iteration)
+            if current_epoch >= self.cfg.snapshot_save_start_epoch:
+                self.save_checkpoint(current_epoch, current_iteration)
 
         # Compute metrics.
         if current_iteration % self.cfg.metrics_iter == 0:
