@@ -27,4 +27,4 @@ done
 echo "COPY imaginaire/model_utils/gancraft/voxlib gancraft/voxlib" >> Dockerfile
 echo "RUN cd gancraft/voxlib && make" >> Dockerfile
 
-docker build -t nvcr.io/nvidian/lpr-imagine/imaginaire:${key}-py3 .
+docker build -t nvcr.io/nvidia/lpr-imagine/imaginaire:${key}-py3 .
