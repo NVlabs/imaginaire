@@ -3,7 +3,7 @@
 key=${1}
 
 rm -rf Dockerfile
-echo "FROM nvcr.io/nvidian/pytorch:${key}-py3" > Dockerfile
+echo "FROM nvcr.io/nvidia/pytorch:${key}-py3" > Dockerfile
 input="Dockerfile.base"
 
 while IFS= read -r line
