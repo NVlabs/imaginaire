@@ -19,7 +19,7 @@ sudo apt-get update && sudo apt-get install -y --allow-downgrades --allow-change
         libx264-dev \
         imagemagick
 
-# pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 -f https://download.pytorch.org/whl/lts/1.8/torch_lts.html
+pip install --upgrade -r scripts/requirements.txt
 
 for p in correlation channelnorm resample2d bias_act upfirdn2d; do
   cd imaginaire/third_party/${p};
@@ -33,5 +33,3 @@ for p in gancraft/voxlib; do
   make all
   cd ${CURRENT};
 done
-
-pip install --upgrade -r scripts/requirements.txt
