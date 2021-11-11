@@ -176,10 +176,15 @@ data:
             is_mask: True
             normalize: False
 
-    full_data_ops: imaginaire.model_utils.label::concat_labels, imaginaire.model_utils.fs_vid2vid::crop_face_from_data
+    full_data_ops: imaginaire.model_utils.label::concat_labels,
+                   imaginaire.model_utils.label::concat_few_shot_labels,
+                   imaginaire.model_utils.fs_vid2vid::crop_person_from_data
     input_labels:
         - pose_maps-densepose
         - poses-openpose
+    input_few_shot_labels:
+        - few_shot_pose_maps-densepose
+        - few_shot_poses-openpose
 
     input_image:
         - images
@@ -248,7 +253,7 @@ test_data:
 
     full_data_ops: imaginaire.model_utils.label::concat_labels,
                    imaginaire.model_utils.label::concat_few_shot_labels,
-                   imaginaire.model_utils.fs_vid2vid::crop_face_from_data
+                   imaginaire.model_utils.fs_vid2vid::crop_person_from_data
     input_labels:
         - pose_maps-densepose
         - poses-openpose
