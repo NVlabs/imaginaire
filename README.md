@@ -9,8 +9,7 @@ optimized implementation of several image and video synthesis methods developed 
 ## License
 
 Imaginaire is released under [NVIDIA Software license](LICENSE.md).
-For commercial use, please consult [researchinquiries@nvidia.com](researchinquiries@nvidia.com)
-
+For commercial use, please consult [NVIDIA Research Inquiries](https://www.nvidia.com/en-us/research/inquiries/).
 
 ## What's inside?
 
