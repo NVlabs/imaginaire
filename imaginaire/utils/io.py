@@ -69,11 +69,14 @@ def download_file(URL, destination):
 
     """
     session = requests.Session()
-    response = session.get(URL, stream=True)
-    token = get_confirm_token(response)
-    if token:
-        params = {'confirm': token}
-        response = session.get(URL, params=params, stream=True)
+    if 'google' in URL:
+        response = session.post(URL + "&confirm=t")
+    else:
+        response = session.get(URL, stream=True)
+        token = get_confirm_token(response)
+        if token:
+            params = {'confirm': token}
+            response = session.get(URL, params=params, stream=True)
     save_response_content(response, destination)
 
 
