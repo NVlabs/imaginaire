@@ -408,7 +408,8 @@ class Generator(Base3DGenerator):
             img = cv2.imread(path).astype(np.float32)[..., [2, 1, 0]].transpose(2, 0, 1) / 255
             img = img * 2 - 1
             img = torch.from_numpy(img)
-
+            return img
+        
         print('Saving to', output_dir)
 
         # Use provided random seed.
