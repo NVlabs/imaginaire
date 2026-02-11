@@ -145,7 +145,7 @@ class Generator(nn.Module):
                 z = torch.randn(
                     bs, self.style_dims, dtype=torch.float32).cuda()
                 if (data['label'].dtype ==
-                        data['label'].dtype == torch.float16):
+                        data['images'].dtype == torch.float16):
                     z = z.half()
                 mu = None
                 logvar = None
@@ -194,7 +194,7 @@ class Generator(nn.Module):
                     z = torch.randn(
                         bs, self.style_dims, dtype=torch.float32).to('cuda')
                     if (data['label'].dtype ==
-                            data['label'].dtype ==
+                            data['images'].dtype ==
                             torch.float16):
                         z = z.half()
                     self.z = z
